@@ -51,6 +51,12 @@ export default async function handler(req, res) {
   const battery = num(p.battery);
   if (battery !== null && (battery < 0 || battery > 100)) return bad(res, 'invalid battery');
 
+  const charging = p.charging === undefined || p.charging === null ? null : p.charging;
+  if (charging !== null && typeof charging !== 'boolean') return bad(res, 'invalid charging');
+
+  let ssid = p.ssid === undefined || p.ssid === null ? null : String(p.ssid).slice(0, 64);
+  if (ssid !== null && ssid.trim() === '') ssid = null;
+
   const speed = num(p.speed);
   if (speed !== null && speed < 0) return bad(res, 'invalid speed');
 
@@ -92,6 +98,8 @@ export default async function handler(req, res) {
     bearing,
     altitude: num(p.altitude),
     battery,
+    charging,
+    ssid,
   };
 
   let r;

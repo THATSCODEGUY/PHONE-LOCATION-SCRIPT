@@ -1,10 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# 主动模式守护进程: 长轮询服务端命令通道 + crond 看门狗
-# 收到"立即定位"命令 → 立刻运行 report.sh 并销单 → 浏览器 8~25 秒内看到新位置
+# 主动+被动统一守护进程 v2.2
+# · 长轮询命令通道: 收到[获取位置] → 立即 report.sh 销单 → 浏览器 8~25 秒出最新位置
+# · 时间制被动上报: 距上次被动 ≥ PASSIVE_MIN 分钟 → report.sh
+#   (由活跃循环驱动, 天然不受安卓 Doze 定时器推迟影响; cron 仅做看门狗)
 set -uo pipefail
 
 BASEDIR=$(cd "$(dirname "$0")" && pwd)
 CONFIG="$BASEDIR/config.env"
+STATE="$BASEDIR/last_passive.txt"
 [ -f "$CONFIG" ] || { echo "[agent] 缺少 config.env, 请先运行 setup.sh"; exit 1; }
 # shellcheck source=/dev/null
 source "$CONFIG"
@@ -12,6 +15,8 @@ source "$CONFIG"
 : "${DEVICE_KEY:?config.env 缺少 DEVICE_KEY}"
 DEVICE_NAME="${DEVICE_NAME:-redmi-note15pro}"
 AGENT_INTERVAL="${AGENT_INTERVAL:-50}"
+PASSIVE_MIN="${PASSIVE_MIN:-60}"
+PASSIVE_SEC=$((PASSIVE_MIN * 60))
 
 log() { echo "[$(date '+%F %T')] [agent] $*" >> "$BASEDIR/agent.log"; }
 
@@ -20,14 +25,23 @@ if pgrep -f "agent\.sh" | grep -qv "^$$\$"; then
   exit 0
 fi
 
-log "守护启动: 长轮询挂 ${AGENT_INTERVAL}s, 设备=$DEVICE_NAME"
+log "守护启动: 长轮询 ${AGENT_INTERVAL}s, 被动每 ${PASSIVE_MIN}min, 设备=$DEVICE_NAME"
 
 while true; do
-  # 看门狗: crond 被杀则拉起
-  if ! pgrep crond >/dev/null 2>&1; then
-    crond 2>/dev/null && log "看门狗: 重启 crond"
+  # --- 时间制被动上报 (不受 Doze 影响) ---
+  last_passive=$(cat "$STATE" 2>/dev/null || echo 0)
+  now=$(date +%s)
+  if [ $((now - last_passive)) -ge "$PASSIVE_SEC" ]; then
+    log "被动上报 (距上次 $((now - last_passive))s)"
+    if bash "$BASEDIR/report.sh"; then
+      date +%s > "$STATE"
+      log "被动上报完成"
+    else
+      log "被动上报失败, 下轮重试"
+    fi
   fi
 
+  # --- 长轮询命令通道 ---
   resp=$(curl -sS --get -m $((AGENT_INTERVAL + 15)) -w '\n%{http_code}' \
     -H "X-Device-Key: $DEVICE_KEY" \
     --data-urlencode "device=$DEVICE_NAME" \
@@ -53,7 +67,6 @@ while true; do
       : # 挂满超时, 无命令, 正常, 立即重连
       ;;
     000)
-      # 网络故障, 稍等重试
       sleep 10
       ;;
     *)

@@ -18,10 +18,16 @@ create table if not exists public.locations (
   speed     double precision,
   bearing   double precision,
   altitude  double precision,
-  battery   double precision check (battery between 0 and 100)
+  battery   double precision check (battery between 0 and 100),
+  charging  boolean,
+  ssid      text
 );
 
 alter table public.locations enable row level security;
+
+-- v2.2: 老库幂等补列 (充电状态 + Wi-Fi SSID)
+alter table public.locations add column if not exists charging boolean;
+alter table public.locations add column if not exists ssid text;
 
 create index if not exists locations_ts_desc_idx   on public.locations (ts desc);
 create index if not exists locations_device_ts_idx on public.locations (device, ts desc);

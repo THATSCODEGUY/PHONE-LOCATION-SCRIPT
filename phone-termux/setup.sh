@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # 一键安装 · 在 Termux 中执行: bash setup.sh
-# v2: 被动 cron(默认60分钟) + 主动 agent 长轮询守护(获取位置按钮 8~25 秒响应)
+# v2.2: agent 统一守护(长轮询+被动上报) + cron 仅做看门狗
 set -euo pipefail
 
 BASEDIR=$(cd "$(dirname "$0")" && pwd)
@@ -59,20 +59,13 @@ else
   [[ "$yn" =~ ^[Yy]$ ]] || exit 1
 fi
 
-echo "==> [5/8] 配置被动模式定时任务 (cron)"
-if [ "$PASSIVE_MIN" -le 59 ]; then
-  CRON_EXPR="*/$PASSIVE_MIN * * * *"
-else
-  HOURS=$((PASSIVE_MIN / 60))
-  [ "$HOURS" -gt 23 ] && HOURS=23
-  CRON_EXPR="0 */$HOURS * * *"
-fi
-CRON_LINE="$CRON_EXPR bash '$BASEDIR/report.sh' >> '$BASEDIR/report.log' 2>&1"
-(crontab -l 2>/dev/null | grep -v "report.sh"; echo "$CRON_LINE") | crontab -
+echo "==> [5/8] 配置看门狗定时任务 (cron 只负责保活, 不负责上报)"
+WATCHDOG_LINE="*/15 * * * * bash '$BASEDIR/watchdog.sh' >> '$BASEDIR/watchdog.log' 2>&1"
+(crontab -l 2>/dev/null | grep -vE "(report\.sh|watchdog\.sh)"; echo "$WATCHDOG_LINE") | crontab -
 pgrep crond >/dev/null 2>&1 || crond
-echo "    已注册: $CRON_LINE"
+echo "    已注册: $WATCHDOG_LINE"
 
-echo "==> [6/8] 启动主动模式守护 (agent 长轮询)"
+echo "==> [6/8] 启动 agent 统一守护 (长轮询 + 被动上报)"
 if pgrep -f "agent\.sh" >/dev/null 2>&1; then
   echo "    agent 已在运行, 跳过启动"
 else
@@ -107,11 +100,12 @@ if bash "$BASEDIR/report.sh"; then
   echo ""
   echo "=============================================================="
   echo " 安装完成! 双模式:"
-  echo " · 被动: cron 每 $PASSIVE_MIN 分钟自动上报一次"
+  echo " · 被动: agent 每 $PASSIVE_MIN 分钟上报一次(时间制, 不受 Doze 影响)"
   echo " · 主动: 浏览器地图点[获取位置] → 8~25 秒出最新位置"
+  echo " · 看门狗: cron 每 15 分钟检查 agent, 死了自动拉起"
   echo " 浏览器打开: $API_BASE/map?token=你的访问令牌"
   echo " 下一步: 按 HYPEROS-保活清单.md 逐项设置手机(必须!)"
-  echo " 日志: report.log(被动) / agent.log(主动)"
+  echo " 日志: report.log(上报) / agent.log(守护) / watchdog.log(自愈)"
   echo "=============================================================="
 else
   echo "    [警告] 试运行失败, 查看日志: $BASEDIR/report.log"

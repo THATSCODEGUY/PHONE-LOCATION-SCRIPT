@@ -15,3 +15,6 @@ phone-termux/*.log
 *.log
 .DS_Store
 Thumbs.db
+
+# 会话记录（绝不入库）
+session-*.md

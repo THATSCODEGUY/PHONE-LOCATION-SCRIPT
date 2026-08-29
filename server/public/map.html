@@ -55,6 +55,7 @@
   <button class="btn active" id="btnFollow" title="自动跟随最新位置">跟随</button>
   <button class="btn" id="btnCenter" title="居中到最新位置">居中</button>
   <button class="btn" id="btnReload" title="重新拉取全部轨迹">刷新全量</button>
+  <button class="btn active" id="btnLowAcc" title="隐藏精度较差(>150m)的轨迹段">隐藏低精度</button>
   <select class="btn" id="selInterval" title="地图自动刷新间隔">
     <option value="5">5 秒刷新</option>
     <option value="10">10 秒刷新</option>
@@ -94,7 +95,9 @@
   var follow = true;
   var marker = null;
   var circle = null;
-  var polyline = L.polyline([], { color: '#4f8cff', weight: 3, opacity: .75 }).addTo(map);
+  var hideLowAcc = true;
+  var polyGood = L.polyline([], { color: '#4f8cff', weight: 3, opacity: .75 }).addTo(map);
+  var polyBad = L.polyline([], { color: '#64748b', weight: 2, opacity: .3, dashArray: '4 6' }).addTo(map);
   var timer = null;
 
   map.on('dragstart', function () { setFollow(false); });
@@ -138,10 +141,17 @@
   document.getElementById('btnCenter').onclick = recenter;
   document.getElementById('btnReload').onclick = function () {
     track = []; lastTs = null; firstLoad = true;
-    polyline.setLatLngs([]);
+    polyGood.setLatLngs([]);
+    polyBad.setLatLngs([]);
     if (marker) { map.removeLayer(marker); marker = null; }
     if (circle) { map.removeLayer(circle); circle = null; }
     refresh();
+  };
+  function isLow(r) { return r.accuracy != null && r.accuracy > 150; }
+  document.getElementById('btnLowAcc').onclick = function () {
+    hideLowAcc = !hideLowAcc;
+    document.getElementById('btnLowAcc').classList.toggle('active', hideLowAcc);
+    render();
   };
 
   /* ---------- 获取位置（主动模式） ---------- */
@@ -230,8 +240,15 @@
   /* ---------- 渲染 ---------- */
   function render() {
     if (!track.length) return;
-    var pts = track.map(function (r) { return [r.lat, r.lng]; });
-    polyline.setLatLngs(pts);
+    var pts = [], good = [], bad = [];
+    track.forEach(function (r) {
+      pts.push([r.lat, r.lng]);
+      if (isLow(r)) bad.push([r.lat, r.lng]); else good.push([r.lat, r.lng]);
+    });
+    polyGood.setLatLngs(good);
+    polyBad.setLatLngs(bad);
+    if (hideLowAcc) { if (map.hasLayer(polyBad)) map.removeLayer(polyBad); }
+    else { if (!map.hasLayer(polyBad)) map.addLayer(polyBad); }
     var last = track[track.length - 1];
 
     if (!marker) {
@@ -242,7 +259,9 @@
         var l = track[track.length - 1];
         return '<b>' + esc(l.device || 'primary') + '</b><br>时间: ' + esc(fmtTime(l.ts)) +
           '<br>来源: ' + esc(l.provider || '-') + ' · 精度 ±' + esc(l.accuracy != null ? Math.round(l.accuracy) + ' m' : '未知') +
-          (l.battery != null ? '<br>电量: ' + Math.round(l.battery) + '%' : '');
+          (l.battery != null ? '<br>电量: ' + Math.round(l.battery) + '%' : '') +
+          (l.charging != null ? '<br>充电: ' + (l.charging ? '是' : '否') : '') +
+          (l.ssid ? '<br>Wi-Fi: ' + esc(l.ssid) : '');
       });
     }
     marker.setLatLng([last.lat, last.lng]);
@@ -277,6 +296,8 @@
       html += '<div class="row"><span class="k">设备</span><span class="v">' + esc(l.device || 'primary') + '</span></div>';
       html += '<div class="row"><span class="k">最后轨迹点</span><span class="v">' + esc(ago(l.ts)) + '</span></div>';
       if (l.battery != null) html += '<div class="row"><span class="k">电量</span><span class="v">' + Math.round(l.battery) + '%' + (l.battery <= 20 ? ' ⚠' : '') + '</span></div>';
+      if (l.charging != null) html += '<div class="row"><span class="k">充电</span><span class="v">' + (l.charging ? '⚡ 充电中' : '未充电') + '</span></div>';
+      if (l.ssid) html += '<div class="row"><span class="k">Wi-Fi</span><span class="v">' + esc(l.ssid) + '</span></div>';
       html += '<div class="row"><span class="k">定位来源</span><span class="v">' + esc(l.provider || '-') + ' · ±' + esc(l.accuracy != null ? Math.round(l.accuracy) + 'm' : '?') + '</span></div>';
       html += '<div class="row"><span class="k">轨迹点数</span><span class="v">' + track.length + '</span></div>';
       html += '<div class="footer">轨迹点时间: ' + esc(fmtTime(l.ts)) + '</div>';
