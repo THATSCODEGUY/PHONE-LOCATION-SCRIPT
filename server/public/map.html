@@ -13,7 +13,7 @@
     position: absolute; top: 12px; left: 12px; z-index: 1000;
     background: rgba(16, 22, 36, .92); color: #e6ebf5;
     border: 1px solid #2a3752; border-radius: 12px;
-    padding: 12px 16px; min-width: 260px; max-width: 90vw;
+    padding: 12px 16px; min-width: 270px; max-width: 90vw;
     backdrop-filter: blur(6px); box-shadow: 0 4px 24px rgba(0,0,0,.4);
     font-size: 13px; line-height: 1.7;
   }
@@ -28,22 +28,43 @@
   .btns { position: absolute; top: 12px; right: 12px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
   .btn {
     background: rgba(16,22,36,.92); color: #cdd6e4; border: 1px solid #2a3752;
-    border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer;
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer; min-width: 88px;
   }
-  .btn:hover { border-color: #4f8cff; color: #fff; }
+  .btn:hover:not(:disabled) { border-color: #4f8cff; color: #fff; }
   .btn.active { border-color: #4f8cff; color: #4f8cff; }
+  .btn:disabled { opacity: .55; cursor: wait; }
+  .btn.primary { border-color: #4f8cff; background: rgba(79,140,255,.18); color: #9cc0ff; font-weight: 600; }
+  .btn.primary:disabled { color: #9cc0ff; }
+  select.btn { min-width: 118px; appearance: none; text-align: center; }
+  select.btn option { background: #101624; }
   .footer { margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a3752; color: #64748b; font-size: 11px; }
   .err { color: #f87171; }
+  #toast {
+    position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 2000;
+    background: rgba(16,22,36,.95); border: 1px solid #2a3752; border-radius: 10px;
+    color: #e6ebf5; padding: 10px 20px; font-size: 13px; display: none; max-width: 86vw; text-align: center;
+  }
+  #toast.err { border-color: #7f1d1d; color: #fca5a5; }
 </style>
 </head>
 <body>
 <div id="map"></div>
 <div class="panel" id="panel">正在加载…</div>
 <div class="btns">
+  <button class="btn primary" id="btnLocate" title="让手机立即上报一次最新位置（通常 8~25 秒）">获取位置</button>
   <button class="btn active" id="btnFollow" title="自动跟随最新位置">跟随</button>
   <button class="btn" id="btnCenter" title="居中到最新位置">居中</button>
   <button class="btn" id="btnReload" title="重新拉取全部轨迹">刷新全量</button>
+  <select class="btn" id="selInterval" title="地图自动刷新间隔">
+    <option value="5">5 秒刷新</option>
+    <option value="10">10 秒刷新</option>
+    <option value="15">15 秒刷新</option>
+    <option value="30">30 秒刷新</option>
+    <option value="60">60 秒刷新</option>
+    <option value="custom">自定义…</option>
+  </select>
 </div>
+<div id="toast"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 (function () {
@@ -51,12 +72,14 @@
   var token = qs.get('token') || '';
   var panel = document.getElementById('panel');
   if (!token) {
-    panel.innerHTML = '<span class="err">缺少 token 参数。<br>用法：/map?token=你的访问令牌</span>';
+    panel.innerHTML = '<span class="err">缺少 token 参数。<br>用法：/map?token=你的访问令牌[&interval=秒]</span>';
     return;
   }
 
-  var OFFLINE_MS = 15 * 60 * 1000;
-  var POLL_MS = 15000;
+  var HB_OFFLINE_MS = 3 * 60 * 1000;   // 心跳超过3分钟判定失联 (长轮询粒度~50s)
+  var DEFAULT_INTERVAL = 15;            // 默认刷新秒数, 可被 URL/localStorage 覆盖
+  var LOCATE_TIMEOUT_MS = 75 * 1000;    // 获取位置按钮超时
+  var LOCATE_POLL_MS = 2000;
 
   var map = L.map('map', { zoomControl: true }).setView([35.0, 105.0], 4);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -66,14 +89,47 @@
 
   var track = [];
   var lastTs = null;
+  var heartbeat = null;   // {device, last_seen, last_report}
   var firstLoad = true;
   var follow = true;
   var marker = null;
   var circle = null;
   var polyline = L.polyline([], { color: '#4f8cff', weight: 3, opacity: .75 }).addTo(map);
+  var timer = null;
 
   map.on('dragstart', function () { setFollow(false); });
 
+  /* ---------- 刷新间隔 ---------- */
+  var selInterval = document.getElementById('selInterval');
+  function applyInterval(sec) {
+    sec = Math.max(1, Math.min(300, sec));
+    localStorage.setItem('pollInterval', String(sec));
+    if (timer) clearInterval(timer);
+    timer = setInterval(refresh, sec * 1000);
+  }
+  selInterval.onchange = function () {
+    if (selInterval.value === 'custom') {
+      var v = prompt('刷新间隔（秒，1~300）：', localStorage.getItem('pollInterval') || DEFAULT_INTERVAL);
+      if (v === null) { selInterval.value = 'custom'; return; }
+      var n = parseInt(v, 10);
+      if (!Number.isFinite(n) || n < 1 || n > 300) { toast('间隔须为 1~300 秒', true); selInterval.value = 'custom'; return; }
+      applyInterval(n);
+      toast('已切换为 ' + n + ' 秒刷新');
+    } else {
+      applyInterval(parseInt(selInterval.value, 10));
+    }
+  };
+  (function initInterval() {
+    var fromUrl = parseInt(qs.get('interval'), 10);
+    var saved = parseInt(localStorage.getItem('pollInterval'), 10);
+    var sec = Number.isFinite(fromUrl) ? fromUrl : (Number.isFinite(saved) ? saved : DEFAULT_INTERVAL);
+    var found = false;
+    [].forEach.call(selInterval.options, function (o) { if (parseInt(o.value, 10) === sec) { selInterval.value = o.value; found = true; } });
+    if (!found) selInterval.value = 'custom';
+    applyInterval(sec);
+  })();
+
+  /* ---------- 按钮 ---------- */
   function setFollow(v) {
     follow = v;
     document.getElementById('btnFollow').classList.toggle('active', v);
@@ -88,26 +144,90 @@
     refresh();
   };
 
-  function recenter() {
-    if (track.length) map.setView([track[track.length - 1].lat, track[track.length - 1].lng], Math.max(map.getZoom(), 16));
+  /* ---------- 获取位置（主动模式） ---------- */
+  var btnLocate = document.getElementById('btnLocate');
+  btnLocate.onclick = function () {
+    btnLocate.disabled = true;
+    btnLocate.textContent = '已发送，等待手机…';
+    fetch('/api/command?token=' + encodeURIComponent(token), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device: currentDevice() })
+    })
+      .then(function (r) { if (!r.ok) throw new Error('创建命令失败 HTTP ' + r.status); return r.json(); })
+      .then(function (cmd) {
+        if (!cmd.id) throw new Error('创建命令失败');
+        toast('命令已排队，手机通常 8~25 秒内响应');
+        pollCmd(cmd.id, Date.now() + LOCATE_TIMEOUT_MS);
+      })
+      .catch(function (e) { resetLocateBtn(); toast(e.message, true); });
+  };
+  function pollCmd(id, deadline) {
+    fetch('/api/command?token=' + encodeURIComponent(token) + '&id=' + id + '&device=' + encodeURIComponent(currentDevice()))
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var st = j.command && j.command.status;
+        if (st === 'done') {
+          resetLocateBtn();
+          toast('已获取最新位置');
+          refresh(true);
+          return;
+        }
+        if (st === 'expired') {
+          resetLocateBtn();
+          toast('手机未响应：可能离线或后台被杀，请查看保活清单', true);
+          return;
+        }
+        if (Date.now() > deadline) {
+          resetLocateBtn();
+          toast('等待超时（' + LOCATE_TIMEOUT_MS / 1000 + '秒），手机可能离线', true);
+          return;
+        }
+        setTimeout(function () { pollCmd(id, deadline); }, LOCATE_POLL_MS);
+      })
+      .catch(function () {
+        if (Date.now() > deadline) { resetLocateBtn(); toast('等待超时，手机可能离线', true); }
+        else setTimeout(function () { pollCmd(id, deadline); }, LOCATE_POLL_MS);
+      });
+  }
+  function resetLocateBtn() {
+    btnLocate.disabled = false;
+    btnLocate.textContent = '获取位置';
   }
 
+  /* ---------- 工具 ---------- */
+  function currentDevice() { return track.length ? (track[track.length - 1].device || 'primary') : (heartbeat && heartbeat.device) || 'primary'; }
+  function recenter() {
+    if (track.length) {
+      var l = track[track.length - 1];
+      map.setView([l.lat, l.lng], Math.max(map.getZoom(), 16));
+    }
+  }
   function esc(s) { var d = document.createElement('i'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
-
   function ago(ts) {
     var s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+    if (s < 10) return '刚刚';
     if (s < 60) return Math.round(s) + ' 秒前';
     if (s < 3600) return Math.round(s / 60) + ' 分钟前';
     if (s < 86400) return Math.round(s / 3600) + ' 小时前';
     return Math.round(s / 86400) + ' 天前';
   }
-
   function fmtTime(ts) {
     var d = new Date(ts);
     function p(n) { return n < 10 ? '0' + n : n; }
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
   }
+  var toastEl = document.getElementById('toast');
+  var toastTimer = null;
+  function toast(msg, isErr) {
+    toastEl.textContent = msg;
+    toastEl.classList.toggle('err', !!isErr);
+    toastEl.style.display = 'block';
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.style.display = 'none'; }, isErr ? 6000 : 3000);
+  }
 
+  /* ---------- 渲染 ---------- */
   function render() {
     if (!track.length) return;
     var pts = track.map(function (r) { return [r.lat, r.lng]; });
@@ -142,31 +262,39 @@
   }
 
   function renderStatus() {
-    if (!track.length) {
-      panel.innerHTML = '暂无任何上报记录。<span class="err">请确认手机端已开始上报。</span>';
-      return;
-    }
+    var hbAge = heartbeat && heartbeat.last_seen ? Date.now() - new Date(heartbeat.last_seen).getTime() : null;
+    var online = hbAge !== null && hbAge < HB_OFFLINE_MS;
     var l = track[track.length - 1];
-    var age = Date.now() - new Date(l.ts).getTime();
-    var online = age < OFFLINE_MS;
-    panel.innerHTML =
-      '<div class="row"><span class="k"><span class="dot ' + (online ? 'on' : 'off') + '"></span>状态</span><span class="v ' + (online ? 'state-on' : 'state-off') + '">' + (online ? '在线' : '失联 ' + ago(l.ts)) + '</span></div>' +
-      '<div class="row"><span class="k">设备</span><span class="v">' + esc(l.device || 'primary') + '</span></div>' +
-      '<div class="row"><span class="k">最后上报</span><span class="v">' + esc(ago(l.ts)) + '</span></div>' +
-      (l.battery != null ? '<div class="row"><span class="k">电量</span><span class="v">' + Math.round(l.battery) + '%' + (l.battery <= 20 ? ' ⚠' : '') + '</span></div>' : '') +
-      '<div class="row"><span class="k">定位来源</span><span class="v">' + esc(l.provider || '-') + ' · ±' + esc(l.accuracy != null ? Math.round(l.accuracy) + 'm' : '?') + '</span></div>' +
-      '<div class="row"><span class="k">轨迹点数</span><span class="v">' + track.length + '</span></div>' +
-      '<div class="footer">最后上报时间: ' + esc(fmtTime(l.ts)) + '</div>';
+
+    var html = '';
+    if (hbAge === null) {
+      html += '<div class="row"><span class="k"><span class="dot off"></span>状态</span><span class="v state-off">从未上线</span></div>';
+    } else {
+      html += '<div class="row"><span class="k"><span class="dot ' + (online ? 'on' : 'off') + '"></span>状态</span><span class="v ' + (online ? 'state-on' : 'state-off') + '">' + (online ? '在线' : '失联') + '</span></div>';
+      html += '<div class="row"><span class="k">心跳</span><span class="v">' + esc(ago(heartbeat.last_seen)) + '</span></div>';
+    }
+    if (l) {
+      html += '<div class="row"><span class="k">设备</span><span class="v">' + esc(l.device || 'primary') + '</span></div>';
+      html += '<div class="row"><span class="k">最后轨迹点</span><span class="v">' + esc(ago(l.ts)) + '</span></div>';
+      if (l.battery != null) html += '<div class="row"><span class="k">电量</span><span class="v">' + Math.round(l.battery) + '%' + (l.battery <= 20 ? ' ⚠' : '') + '</span></div>';
+      html += '<div class="row"><span class="k">定位来源</span><span class="v">' + esc(l.provider || '-') + ' · ±' + esc(l.accuracy != null ? Math.round(l.accuracy) + 'm' : '?') + '</span></div>';
+      html += '<div class="row"><span class="k">轨迹点数</span><span class="v">' + track.length + '</span></div>';
+      html += '<div class="footer">轨迹点时间: ' + esc(fmtTime(l.ts)) + '</div>';
+    } else {
+      html += '<div class="row"><span class="k">轨迹</span><span class="v err">暂无上报记录</span></div>';
+    }
+    panel.innerHTML = html;
   }
 
   function renderError(msg) {
     panel.innerHTML = '<span class="err">' + esc(msg) + '</span>';
   }
 
-  function refresh() {
+  /* ---------- 数据拉取 ---------- */
+  function fetchTrack() {
     var url = '/api/locations?token=' + encodeURIComponent(token) + '&limit=500';
     if (lastTs) url += '&since=' + encodeURIComponent(lastTs);
-    fetch(url)
+    return fetch(url)
       .then(function (r) {
         if (r.status === 401) throw new Error('访问令牌无效');
         if (!r.ok) throw new Error('加载失败 HTTP ' + r.status);
@@ -180,13 +308,25 @@
           lastTs = rows[rows.length - 1].ts;
           render();
         }
+      });
+  }
+  function fetchHeartbeat() {
+    return fetch('/api/command?token=' + encodeURIComponent(token) + '&device=' + encodeURIComponent(currentDevice()))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.heartbeat) heartbeat = j.heartbeat; })
+      .catch(function () {});
+  }
+
+  function refresh(afterLocate) {
+    Promise.all([fetchTrack(), fetchHeartbeat()])
+      .then(function () {
         renderStatus();
+        if (afterLocate) recenter();
       })
       .catch(function (e) { renderError(e.message); });
   }
 
   refresh();
-  setInterval(refresh, POLL_MS);
 })();
 </script>
 </body>

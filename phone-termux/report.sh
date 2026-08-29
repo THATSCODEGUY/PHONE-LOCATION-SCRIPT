@@ -1,7 +1,10 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # 定位上报脚本 · Redmi Note 15 Pro (Termux)
 # 流程: GPS定位(15s) → 失败降级网络定位 → 读电量 → POST上报 → 失败落盘outbox → 下轮补传
+# 参数: $1 = 可选命令ID(主动模式), 上报成功后服务端自动销单
 set -uo pipefail
+
+CMD_ID="${1:-}"
 
 BASEDIR=$(cd "$(dirname "$0")" && pwd)
 CONFIG="$BASEDIR/config.env"
@@ -61,6 +64,7 @@ batt=$(termux-battery-status 2>/dev/null | jq -r '.percentage // empty')
 
 payload=$(jq -nc --slurpfile l <(printf '%s' "$loc") \
   --arg provider "$prov" --arg device "$DEVICE_NAME" --arg batt "$batt" \
+  --arg cmd "$CMD_ID" \
   --argjson ts "$(date -u +%s)" '
   ($l[0]) as $o | {
     lat: $o.latitude,
@@ -71,6 +75,7 @@ payload=$(jq -nc --slurpfile l <(printf '%s' "$loc") \
     provider: $provider,
     device: $device,
     battery: (if $batt == "" then null else ($batt | tonumber) end),
+    cmd_id: (if $cmd == "" then null else ($cmd | tonumber) end),
     ts: ($ts | todate)
   }')
 

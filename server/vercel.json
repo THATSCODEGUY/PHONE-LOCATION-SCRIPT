@@ -1,4 +1,9 @@
 {
+  "functions": {
+    "api/poll.js": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
     { "source": "/map", "destination": "/map.html" }
   ],

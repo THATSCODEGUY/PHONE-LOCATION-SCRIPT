@@ -1,15 +1,16 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # 一键安装 · 在 Termux 中执行: bash setup.sh
+# v2: 被动 cron(默认60分钟) + 主动 agent 长轮询守护(获取位置按钮 8~25 秒响应)
 set -euo pipefail
 
 BASEDIR=$(cd "$(dirname "$0")" && pwd)
 CONFIG="$BASEDIR/config.env"
 
-echo "==> [1/7] 安装依赖 (termux-api jq curl cronie)"
+echo "==> [1/8] 安装依赖 (termux-api jq curl cronie)"
 yes | pkg update >/dev/null 2>&1 || true
 pkg install -y termux-api jq curl cronie >/dev/null
 
-echo "==> [2/7] 检查 Termux:API 配套 App"
+echo "==> [2/8] 检查 Termux:API 配套 App"
 if ! termux-location -p network -t 5 >/dev/null 2>&1; then
   echo "    [警告] termux-location 不可用!"
   echo "    请从 F-Droid 安装 Termux:API App 后重新运行本脚本"
@@ -17,7 +18,7 @@ if ! termux-location -p network -t 5 >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> [3/7] 写入配置"
+echo "==> [3/8] 写入配置"
 if [ -f "$CONFIG" ]; then
   echo "    已存在 config.env, 跳过 (如需修改请手动编辑)"
 else
@@ -35,10 +36,20 @@ DEVICE_NAME='$DEVICE_NAME'
 EOF
 fi
 
+read -rp "    被动上报间隔(分钟, 5~1440) [60]: " PASSIVE_MIN
+PASSIVE_MIN="${PASSIVE_MIN:-60}"
+[[ "$PASSIVE_MIN" =~ ^[0-9]+$ ]] && [ "$PASSIVE_MIN" -ge 5 ] && [ "$PASSIVE_MIN" -le 1440 ] || { echo "间隔须为 5~1440 分钟"; exit 1; }
+read -rp "    主动模式长轮询挂线(秒, 8~55) [50]: " AGENT_INTERVAL
+AGENT_INTERVAL="${AGENT_INTERVAL:-50}"
+[[ "$AGENT_INTERVAL" =~ ^[0-9]+$ ]] && [ "$AGENT_INTERVAL" -ge 8 ] && [ "$AGENT_INTERVAL" -le 55 ] || { echo "挂线须为 8~55 秒"; exit 1; }
+grep -q '^PASSIVE_MIN=' "$CONFIG" 2>/dev/null || echo "PASSIVE_MIN='$PASSIVE_MIN'" >> "$CONFIG"
+grep -q '^AGENT_INTERVAL=' "$CONFIG" 2>/dev/null || echo "AGENT_INTERVAL='$AGENT_INTERVAL'" >> "$CONFIG"
+chmod 600 "$CONFIG"
+
 # shellcheck source=/dev/null
 source "$CONFIG"
 
-echo "==> [4/7] 测试服务端连通性"
+echo "==> [4/8] 测试服务端连通性"
 code=$(curl -s -o /dev/null -w '%{http_code}' -m 15 "$API_BASE/api/report" 2>/dev/null || echo 000)
 if [ "$code" = "405" ] || [ "$code" = "401" ]; then
   echo "    服务端可达 (HTTP $code)"
@@ -48,44 +59,60 @@ else
   [[ "$yn" =~ ^[Yy]$ ]] || exit 1
 fi
 
-echo "==> [5/7] 配置定时任务 (cron)"
-read -rp "    上报间隔分钟 [5]: " INTERVAL
-INTERVAL="${INTERVAL:-5}"
-[[ "$INTERVAL" =~ ^[0-9]+$ ]] && [ "$INTERVAL" -ge 1 ] && [ "$INTERVAL" -le 59 ] || { echo "间隔须为 1-59"; exit 1; }
-CRON_LINE="*/$INTERVAL * * * * bash '$BASEDIR/report.sh' >> '$BASEDIR/report.log' 2>&1"
+echo "==> [5/8] 配置被动模式定时任务 (cron)"
+if [ "$PASSIVE_MIN" -le 59 ]; then
+  CRON_EXPR="*/$PASSIVE_MIN * * * *"
+else
+  HOURS=$((PASSIVE_MIN / 60))
+  [ "$HOURS" -gt 23 ] && HOURS=23
+  CRON_EXPR="0 */$HOURS * * *"
+fi
+CRON_LINE="$CRON_EXPR bash '$BASEDIR/report.sh' >> '$BASEDIR/report.log' 2>&1"
 (crontab -l 2>/dev/null | grep -v "report.sh"; echo "$CRON_LINE") | crontab -
 pgrep crond >/dev/null 2>&1 || crond
 echo "    已注册: $CRON_LINE"
 
-echo "==> [6/7] 配置开机自启 (Termux:Boot)"
+echo "==> [6/8] 启动主动模式守护 (agent 长轮询)"
+if pgrep -f "agent\.sh" >/dev/null 2>&1; then
+  echo "    agent 已在运行, 跳过启动"
+else
+  nohup bash "$BASEDIR/agent.sh" >/dev/null 2>&1 &
+  sleep 2
+  pgrep -f "agent\.sh" >/dev/null 2>&1 && echo "    agent 已启动 (PID $(pgrep -f 'agent\.sh' | head -n1))" || echo "    [警告] agent 启动失败, 查看 agent.log"
+fi
+
+echo "==> [7/8] 配置开机自启 (Termux:Boot)"
 BOOT_DIR="$HOME/.termux/boot"
 if [ -d "$BOOT_DIR" ] || [ -d "$HOME/.termux" ]; then
   mkdir -p "$BOOT_DIR"
-  cat > "$BOOT_DIR/phone-loc.sh" <<'EOF'
+  cat > "$BOOT_DIR/phone-loc.sh" <<EOF
 #!/data/data/com.termux/files/usr/bin/sh
 termux-wake-lock
 crond
+nohup bash "$BASEDIR/agent.sh" >/dev/null 2>&1 &
 EOF
   chmod +x "$BOOT_DIR/phone-loc.sh"
-  echo "    已写入 ~/.termux/boot/phone-loc.sh (开机: 唤醒锁 + crond)"
+  echo "    已写入 ~/.termux/boot/phone-loc.sh (开机: 唤醒锁 + crond + agent)"
   command -v termux-boot >/dev/null 2>&1 || \
   [ ! -d /data/data/com.termux.boot ] && \
   echo "    [提示] 建议安装 Termux:Boot (F-Droid) 并打开一次, 开机自启才生效"
 else
-  echo "    [警告] 未检测到 Termux:Boot, 重启后需手动打开 Termux 运行: crond"
+  echo "    [警告] 未检测到 Termux:Boot, 重启后需手动打开 Termux 运行 setup.sh"
 fi
 termux-wake-lock
 echo "    已开启唤醒锁 (termux-wake-lock)"
 
-echo "==> [7/7] 立即试运行一次上报"
+echo "==> [8/8] 立即试运行一次上报"
 if bash "$BASEDIR/report.sh"; then
   echo ""
-  echo "=============================================="
-  echo " 安装完成! 浏览器打开:"
-  echo " $API_BASE/map?token=你的访问令牌"
-  echo " 下一步: 按 HYPEROS-保活清单.md 逐项设置手机"
-  echo " 日志: tail -f $BASEDIR/report.log"
-  echo "=============================================="
+  echo "=============================================================="
+  echo " 安装完成! 双模式:"
+  echo " · 被动: cron 每 $PASSIVE_MIN 分钟自动上报一次"
+  echo " · 主动: 浏览器地图点[获取位置] → 8~25 秒出最新位置"
+  echo " 浏览器打开: $API_BASE/map?token=你的访问令牌"
+  echo " 下一步: 按 HYPEROS-保活清单.md 逐项设置手机(必须!)"
+  echo " 日志: report.log(被动) / agent.log(主动)"
+  echo "=============================================================="
 else
   echo "    [警告] 试运行失败, 查看日志: $BASEDIR/report.log"
 fi

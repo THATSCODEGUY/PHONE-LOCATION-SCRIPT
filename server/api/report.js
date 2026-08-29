@@ -62,6 +62,9 @@ export default async function handler(req, res) {
 
   const device = p.device === undefined || p.device === null ? 'primary' : String(p.device).slice(0, 64);
 
+  const cmdId = p.cmd_id === undefined || p.cmd_id === null || p.cmd_id === '' ? null : Number(p.cmd_id);
+  if (cmdId !== null && (!Number.isInteger(cmdId) || cmdId <= 0)) return bad(res, 'invalid cmd_id');
+
   let tsMs = Date.now();
   if (p.ts !== undefined && p.ts !== null && p.ts !== '') {
     const t = Date.parse(String(p.ts));
@@ -112,6 +115,25 @@ export default async function handler(req, res) {
     const t = await r.text().catch(() => '');
     console.error(`report: supabase ${r.status} ${t.slice(0, 300)}`);
     return res.status(502).json({ error: 'upstream failed' });
+  }
+
+  // 上报成功后的跟进操作: 销单 + 刷新 last_report 心跳 (失败不影响上报本身)
+  try {
+    if (cmdId !== null) {
+      const rp = await fetch(`${sbUrl}/rest/v1/commands?id=eq.${cmdId}&status=eq.claimed`, {
+        method: 'PATCH',
+        headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+        body: JSON.stringify({ status: 'done', done_at: new Date().toISOString() }),
+      });
+      if (!rp.ok) console.error(`report: ack cmd ${cmdId} failed ${rp.status}`);
+    }
+    await fetch(`${sbUrl}/rest/v1/devices?on_conflict=device`, {
+      method: 'POST',
+      headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+      body: JSON.stringify({ device, last_report: row.ts, last_seen: new Date().toISOString() }),
+    });
+  } catch (e) {
+    console.error('report: follow-up failed', e.message);
   }
 
   return res.status(200).json({ ok: true, ts: row.ts });
