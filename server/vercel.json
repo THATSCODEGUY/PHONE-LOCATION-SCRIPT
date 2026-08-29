@@ -1,0 +1,13 @@
+{
+  "rewrites": [
+    { "source": "/map", "destination": "/map.html" }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>设备位置追踪</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #0f1420; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  #map { height: 100%; }
+  .panel {
+    position: absolute; top: 12px; left: 12px; z-index: 1000;
+    background: rgba(16, 22, 36, .92); color: #e6ebf5;
+    border: 1px solid #2a3752; border-radius: 12px;
+    padding: 12px 16px; min-width: 260px; max-width: 90vw;
+    backdrop-filter: blur(6px); box-shadow: 0 4px 24px rgba(0,0,0,.4);
+    font-size: 13px; line-height: 1.7;
+  }
+  .row { display: flex; justify-content: space-between; gap: 18px; }
+  .row .k { color: #8b97ad; }
+  .row .v { color: #e6ebf5; font-variant-numeric: tabular-nums; text-align: right; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
+  .dot.on  { background: #34d399; box-shadow: 0 0 8px #34d399; }
+  .dot.off { background: #f87171; box-shadow: 0 0 8px #f87171; }
+  .state-on  { color: #34d399; font-weight: 600; }
+  .state-off { color: #f87171; font-weight: 700; }
+  .btns { position: absolute; top: 12px; right: 12px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
+  .btn {
+    background: rgba(16,22,36,.92); color: #cdd6e4; border: 1px solid #2a3752;
+    border-radius: 8px; padding: 8px 12px; font-size: 13px; cursor: pointer;
+  }
+  .btn:hover { border-color: #4f8cff; color: #fff; }
+  .btn.active { border-color: #4f8cff; color: #4f8cff; }
+  .footer { margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a3752; color: #64748b; font-size: 11px; }
+  .err { color: #f87171; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel" id="panel">正在加载…</div>
+<div class="btns">
+  <button class="btn active" id="btnFollow" title="自动跟随最新位置">跟随</button>
+  <button class="btn" id="btnCenter" title="居中到最新位置">居中</button>
+  <button class="btn" id="btnReload" title="重新拉取全部轨迹">刷新全量</button>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(function () {
+  var qs = new URLSearchParams(location.search);
+  var token = qs.get('token') || '';
+  var panel = document.getElementById('panel');
+  if (!token) {
+    panel.innerHTML = '<span class="err">缺少 token 参数。<br>用法：/map?token=你的访问令牌</span>';
+    return;
+  }
+
+  var OFFLINE_MS = 15 * 60 * 1000;
+  var POLL_MS = 15000;
+
+  var map = L.map('map', { zoomControl: true }).setView([35.0, 105.0], 4);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  var track = [];
+  var lastTs = null;
+  var firstLoad = true;
+  var follow = true;
+  var marker = null;
+  var circle = null;
+  var polyline = L.polyline([], { color: '#4f8cff', weight: 3, opacity: .75 }).addTo(map);
+
+  map.on('dragstart', function () { setFollow(false); });
+
+  function setFollow(v) {
+    follow = v;
+    document.getElementById('btnFollow').classList.toggle('active', v);
+  }
+  document.getElementById('btnFollow').onclick = function () { setFollow(!follow); if (follow) recenter(); };
+  document.getElementById('btnCenter').onclick = recenter;
+  document.getElementById('btnReload').onclick = function () {
+    track = []; lastTs = null; firstLoad = true;
+    polyline.setLatLngs([]);
+    if (marker) { map.removeLayer(marker); marker = null; }
+    if (circle) { map.removeLayer(circle); circle = null; }
+    refresh();
+  };
+
+  function recenter() {
+    if (track.length) map.setView([track[track.length - 1].lat, track[track.length - 1].lng], Math.max(map.getZoom(), 16));
+  }
+
+  function esc(s) { var d = document.createElement('i'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+
+  function ago(ts) {
+    var s = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);
+    if (s < 60) return Math.round(s) + ' 秒前';
+    if (s < 3600) return Math.round(s / 60) + ' 分钟前';
+    if (s < 86400) return Math.round(s / 3600) + ' 小时前';
+    return Math.round(s / 86400) + ' 天前';
+  }
+
+  function fmtTime(ts) {
+    var d = new Date(ts);
+    function p(n) { return n < 10 ? '0' + n : n; }
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
+  function render() {
+    if (!track.length) return;
+    var pts = track.map(function (r) { return [r.lat, r.lng]; });
+    polyline.setLatLngs(pts);
+    var last = track[track.length - 1];
+
+    if (!marker) {
+      marker = L.circleMarker([last.lat, last.lng], {
+        radius: 8, color: '#fff', weight: 2, fillColor: '#4f8cff', fillOpacity: 1
+      }).addTo(map);
+      marker.bindPopup(function () {
+        var l = track[track.length - 1];
+        return '<b>' + esc(l.device || 'primary') + '</b><br>时间: ' + esc(fmtTime(l.ts)) +
+          '<br>来源: ' + esc(l.provider || '-') + ' · 精度 ±' + esc(l.accuracy != null ? Math.round(l.accuracy) + ' m' : '未知') +
+          (l.battery != null ? '<br>电量: ' + Math.round(l.battery) + '%' : '');
+      });
+    }
+    marker.setLatLng([last.lat, last.lng]);
+
+    if (last.accuracy != null && last.accuracy > 0) {
+      if (!circle) circle = L.circle([last.lat, last.lng], {
+        radius: last.accuracy, color: '#4f8cff', weight: 1, fillOpacity: .08
+      }).addTo(map);
+      circle.setLatLng([last.lat, last.lng]).setRadius(last.accuracy);
+    }
+
+    if (firstLoad) {
+      map.fitBounds(L.latLngBounds(pts).pad(0.2));
+      firstLoad = false;
+    }
+    if (follow && !firstLoad) recenter();
+  }
+
+  function renderStatus() {
+    if (!track.length) {
+      panel.innerHTML = '暂无任何上报记录。<span class="err">请确认手机端已开始上报。</span>';
+      return;
+    }
+    var l = track[track.length - 1];
+    var age = Date.now() - new Date(l.ts).getTime();
+    var online = age < OFFLINE_MS;
+    panel.innerHTML =
+      '<div class="row"><span class="k"><span class="dot ' + (online ? 'on' : 'off') + '"></span>状态</span><span class="v ' + (online ? 'state-on' : 'state-off') + '">' + (online ? '在线' : '失联 ' + ago(l.ts)) + '</span></div>' +
+      '<div class="row"><span class="k">设备</span><span class="v">' + esc(l.device || 'primary') + '</span></div>' +
+      '<div class="row"><span class="k">最后上报</span><span class="v">' + esc(ago(l.ts)) + '</span></div>' +
+      (l.battery != null ? '<div class="row"><span class="k">电量</span><span class="v">' + Math.round(l.battery) + '%' + (l.battery <= 20 ? ' ⚠' : '') + '</span></div>' : '') +
+      '<div class="row"><span class="k">定位来源</span><span class="v">' + esc(l.provider || '-') + ' · ±' + esc(l.accuracy != null ? Math.round(l.accuracy) + 'm' : '?') + '</span></div>' +
+      '<div class="row"><span class="k">轨迹点数</span><span class="v">' + track.length + '</span></div>' +
+      '<div class="footer">最后上报时间: ' + esc(fmtTime(l.ts)) + '</div>';
+  }
+
+  function renderError(msg) {
+    panel.innerHTML = '<span class="err">' + esc(msg) + '</span>';
+  }
+
+  function refresh() {
+    var url = '/api/locations?token=' + encodeURIComponent(token) + '&limit=500';
+    if (lastTs) url += '&since=' + encodeURIComponent(lastTs);
+    fetch(url)
+      .then(function (r) {
+        if (r.status === 401) throw new Error('访问令牌无效');
+        if (!r.ok) throw new Error('加载失败 HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function (rows) {
+        if (rows.length) {
+          for (var i = 0; i < rows.length; i++) {
+            if (!lastTs || new Date(rows[i].ts) > new Date(lastTs)) track.push(rows[i]);
+          }
+          lastTs = rows[rows.length - 1].ts;
+          render();
+        }
+        renderStatus();
+      })
+      .catch(function (e) { renderError(e.message); });
+  }
+
+  refresh();
+  setInterval(refresh, POLL_MS);
+})();
+</script>
+</body>
+</html>

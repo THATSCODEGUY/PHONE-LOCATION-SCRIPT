@@ -1,0 +1,17 @@
+# 依赖 / 平台
+node_modules/
+.vercel/
+
+# 密钥与环境变量（绝不入库）
+.env
+.env.*
+phone-termux/config.env
+
+# 手机端运行时产物
+phone-termux/outbox.jsonl
+phone-termux/*.log
+
+# 通用
+*.log
+.DS_Store
+Thumbs.db
