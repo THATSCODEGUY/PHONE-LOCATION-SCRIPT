@@ -48,8 +48,8 @@ CHANGELOG.md   版本历史
 ### 1. GitHub
 
 1. 新建**公有**仓库，推送本仓库全部内容
-2. ⚠ 首次 push 前：把 `phone-termux/install.sh` 顶部 `REPO_BASE` 改成你自己的仓库路径（只改引号内），再 push
-3. `session-ses_fceb.md` 已 gitignore 并移出版本控制（公开仓库卫生）
+2. `install.sh` 的 `REPO_BASE` 已写死为 `THATSCODEGUY/PHONE-LOCATION-SCRIPT`（换仓库/改名时需同步更新）
+3. `session-*.md` 已 gitignore 并移出版本控制（公开仓库卫生）
 
 ### 2. Supabase
 
@@ -87,9 +87,9 @@ curl "https://xxx.vercel.app/api/locations?token=<ACCESS_TOKEN>&limit=10"
 ### 6. 手机端（Termux 一条命令）
 
 1. F-Droid 安装 **Termux / Termux:API / Termux:Boot** 三件套，各打开一次（⚠ 不要 Google Play 版）
-2. Termux 里粘这一条（替换成你的仓库路径）：
+2. Termux 里粘这一条（已写死仓库地址，开箱即用）：
    ```bash
-   bash -c "$(curl -sSL https://raw.githubusercontent.com/你的用户名/你的仓库名/main/phone-termux/install.sh)"
+   bash -c "$(curl -sSL https://raw.githubusercontent.com/THATSCODEGUY/PHONE-LOCATION-SCRIPT/main/phone-termux/install.sh)"
    ```
    它会自动：下载 report/setup/agent/watchdog + 保活清单 → 解到 `$HOME/phone-loc/` → 运行 setup.sh 交互安装
 3. **逐项完成 `HYPEROS-保活清单.md`**（含 §8 agent 专项检查，决定生死）

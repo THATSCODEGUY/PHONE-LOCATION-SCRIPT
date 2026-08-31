@@ -1,1 +1,23 @@
+
+你漏了什么（两处）
+1. 生成两把自家密钥（Vercel 要填 4 个变量，其中 2 个是你自己造的）：
+      openssl rand -hex 32   # 第1次 → DEVICE_KEY（手机用）
+   openssl rand -hex 32   # 第2次 → ACCESS_TOKEN（地图网址用）
+   2. push 之前要先改 install.sh 的 REPO_BASE → 把仓库地址发我，我一行改掉再 push（否则手机一键安装命令是死链）。
+完整顺序（补漏后的终版）
+1. GitHub：建空公有仓库 → 地址发我 → 我改 install.sh → 你执行：
+      git remote add origin https://github.com/你的用户名/仓库名.git
+   git branch -M main
+   git push -u origin main
+   2. Supabase：建项目（区域选香港/新加坡）→ 跑 schema.sql → 抄下 Project URL + service_role key（⚠ 不是 anon key）
+3. 生成两把密钥（上面的 openssl 命令）
+4. Vercel：vercel.com 用 GitHub 账号登录 → Add New Project → Import 你的仓库 → Root Directory 改成 server（关键，漏了就部署不出来）→ Environment Variables 填 4 个（SUPABASE_URL / SUPABASE_SERVICE_KEY / DEVICE_KEY / ACCESS_TOKEN）→ Deploy → 拿到 https://xxx.vercel.app
+5. 验证：浏览器开 https://xxx.vercel.app/map?token=你的ACCESS_TOKEN，能看到地图就通了（“暂无上报记录”正常，手机还没装）
+6. 手机端：F-Droid 装 Termux 三件套 → Termux 粘一条命令（bash -c "$(curl -sSL https://raw.githubusercontent.com/你/仓库/main/phone-termux/install.sh)"）→ 按保活清单逐项设置
+
+
+
+
 整套系统：手机端 Redmi Note 15 Pro 用 Termux 跑 bash 脚本（report.sh 通过 termux-location 取 GPS/网络定位、agent.sh 用 curl 长轮询接命令），按 cron 被动定时+主动按钮双模式，通过 HTTPS 把位置 POST 到 Vercel 上零依赖 Node.js serverless 函数（report/poll/command/locations 四个端点，DEVICE_KEY 与 ACCESS_TOKEN 双密钥时序安全鉴权），数据写入 Supabase Postgres（locations/commands/devices 三表，RLS 零公开策略，service_key 仅存 Vercel 环境变量），浏览器打开 Vercel 托管的 Leaflet+OpenStreetMap 页面 /map?token= 实时查看位置/精度圈/轨迹/心跳在线状态，手机脚本经 GitHub 公有仓库 raw.githubusercontent.com 直链一键安装。
+
+

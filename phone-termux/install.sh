@@ -1,11 +1,11 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # 一键安装引导 · 公有 GitHub 直链下载
-# ⚠ 首次使用前: 把下面 REPO_BASE 改成你自己的 GitHub 仓库路径(只改引号内), 然后 push 到 GitHub
+# 仓库地址已配置: THATSCODEGUY/PHONE-LOCATION-SCRIPT (若换仓库/改名, 同步修改下面 REPO_BASE)
 # 手机 Termux 里运行(整行一条命令):
-#   bash -c "$(curl -sSL https://raw.githubusercontent.com/你的用户名/你的仓库名/main/phone-termux/install.sh)"
+#   bash -c "$(curl -sSL https://raw.githubusercontent.com/THATSCODEGUY/PHONE-LOCATION-SCRIPT/main/phone-termux/install.sh)"
 set -euo pipefail
 
-REPO_BASE='https://raw.githubusercontent.com/你的用户名/你的仓库名/main'
+REPO_BASE='https://raw.githubusercontent.com/THATSCODEGUY/PHONE-LOCATION-SCRIPT/main'
 DL="$REPO_BASE/phone-termux"
 DIR="$HOME/phone-loc"
 
