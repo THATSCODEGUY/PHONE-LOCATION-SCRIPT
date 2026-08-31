@@ -35,11 +35,11 @@ globalThis.fetch = async (url, opts = {}) => {
   const body = opts.body ? JSON.parse(opts.body) : {};
   db.calls.push({ p, method, body, search: u.search });
 
-  if (p === '/rest/v1/locations' && method === 'POST') return jres({}, 201);
-  if (p === '/rest/v1/locations' && method === 'GET')
+  if (p === '/rest/v1/phonelocation_locations' && method === 'POST') return jres({}, 201);
+  if (p === '/rest/v1/phonelocation_locations' && method === 'GET')
     return jres([{ ts: '2024-01-01T00:00:02Z', lat: 1, lng: 2 }, { ts: '2024-01-01T00:00:01Z', lat: 1, lng: 2 }], 200);
 
-  if (p === '/rest/v1/commands' && method === 'POST') {
+  if (p === '/rest/v1/phonelocation_commands' && method === 'POST') {
     const row = {
       id: db.nextCmdId++, created_at: new Date().toISOString(),
       device: body.device || 'primary', type: body.type || 'locate',
@@ -48,7 +48,7 @@ globalThis.fetch = async (url, opts = {}) => {
     db.commands.push(row);
     return jres([row], 201);
   }
-  if (p === '/rest/v1/commands' && method === 'PATCH') {
+  if (p === '/rest/v1/phonelocation_commands' && method === 'PATCH') {
     const idm = /id=eq\.(\d+)/.exec(u.search);
     const stm = /status=eq\.(\w+)/.exec(u.search);
     const ltm = /created_at=lt\.([^&]+)/.exec(u.search);
@@ -61,23 +61,23 @@ globalThis.fetch = async (url, opts = {}) => {
     }
     return { ok: true, status: 204, text: async () => '' };
   }
-  if (p === '/rest/v1/commands' && method === 'GET') {
+  if (p === '/rest/v1/phonelocation_commands' && method === 'GET') {
     const idm = /id=eq\.(\d+)/.exec(u.search);
     const rows = db.commands.filter((c) => !idm || String(c.id) === idm[1]);
     return jres(rows, 200);
   }
 
-  if (p === '/rest/v1/devices' && method === 'POST') {
+  if (p === '/rest/v1/phonelocation_devices' && method === 'POST') {
     db.devices[body.device] = Object.assign(db.devices[body.device] || { device: body.device }, body);
     return jres([db.devices[body.device]], 201);
   }
-  if (p === '/rest/v1/devices' && method === 'GET') {
+  if (p === '/rest/v1/phonelocation_devices' && method === 'GET') {
     const dm = /device=eq\.([\w-]+)/.exec(u.search);
     const rows = Object.values(db.devices).filter((d) => !dm || d.device === dm[1]);
     return jres(rows, 200);
   }
 
-  if (p === '/rest/v1/rpc/claim_next_command') {
+  if (p === '/rest/v1/rpc/phonelocation_claim_next_command') {
     const cand = db.commands.filter((c) => c.status === 'pending').sort((a, b) => a.id - b.id)[0];
     if (!cand) return jres([], 200);
     cand.status = 'claimed';
@@ -114,7 +114,7 @@ check('wrong key 401', r.code === 401);
 db.calls = [];
 r = mockRes(); await report(mockReq('POST', dkHeader, goodBody), r);
 check('valid report 200', r.code === 200, `got ${r.code}`);
-check('devices heartbeat upsert on report', db.calls.some((c) => c.p === '/rest/v1/devices' && c.body.device === 'test' && c.body.last_report));
+check('devices heartbeat upsert on report', db.calls.some((c) => c.p === '/rest/v1/phonelocation_devices' && c.body.device === 'test' && c.body.last_report));
 
 r = mockRes(); await report(mockReq('POST', dkHeader, { ...goodBody, lat: 999 }), r);
 check('lat 999 rejected 400', r.code === 400);
@@ -125,17 +125,17 @@ check('non-boolean charging 400', r.code === 400);
 db.calls = [];
 r = mockRes(); await report(mockReq('POST', dkHeader, { ...goodBody, charging: true, ssid: 'HomeWiFi-5G' }), r);
 check('charging/ssid accepted 200', r.code === 200);
-const envRow = db.calls.find((c) => c.p === '/rest/v1/locations');
+const envRow = db.calls.find((c) => c.p === '/rest/v1/phonelocation_locations');
 check('charging/ssid persisted', envRow && envRow.body.charging === true && envRow.body.ssid === 'HomeWiFi-5G');
 db.calls = [];
 r = mockRes(); await report(mockReq('POST', dkHeader, { ...goodBody, ssid: 'x'.repeat(100) }), r);
 check('long ssid accepted (truncated)', r.code === 200);
-const truncRow = db.calls.find((c) => c.p === '/rest/v1/locations');
+const truncRow = db.calls.find((c) => c.p === '/rest/v1/phonelocation_locations');
 check('ssid truncated to 64', truncRow && truncRow.body.ssid.length === 64);
 db.calls = [];
 r = mockRes(); await report(mockReq('POST', dkHeader, { ...goodBody, ssid: '   ' }), r);
 check('blank ssid accepted 200', r.code === 200);
-const blankRow = db.calls.find((c) => c.p === '/rest/v1/locations');
+const blankRow = db.calls.find((c) => c.p === '/rest/v1/phonelocation_locations');
 check('blank ssid normalized to null', blankRow && blankRow.body.ssid === null);
 r = mockRes(); await report(mockReq('POST', dkHeader, { ...goodBody, cmd_id: 'abc' }), r);
 check('non-numeric cmd_id 400', r.code === 400);
@@ -151,7 +151,7 @@ check('poll claims seeded command', r.code === 200 && r.body.id === cmdId);
 db.calls = [];
 r = mockRes(); await report(mockReq('POST', dkHeader, { ...goodBody, cmd_id: cmdId }), r);
 check('report with cmd_id 200', r.code === 200);
-const ack = db.calls.find((c) => c.p === '/rest/v1/commands' && c.method === 'PATCH');
+const ack = db.calls.find((c) => c.p === '/rest/v1/phonelocation_commands' && c.method === 'PATCH');
 check('ack PATCH targets id & guards claimed', !!ack && ack.search.includes(`id=eq.${cmdId}`) && ack.search.includes('status=eq.claimed') && ack.body.status === 'done');
 r = mockRes(); await command(mockReq('GET', {}, null, { token: 'at_654321', id: String(cmdId), device: 'test' }), r);
 check('command status now done', r.body.command && r.body.command.status === 'done');
@@ -164,6 +164,7 @@ r = mockRes(); await locations(mockReq('GET', {}, null, { token: 'nope' }), r);
 check('wrong token 401', r.code === 401);
 r = mockRes(); await locations(mockReq('GET', {}, null, { token: 'at_654321', limit: '10' }), r);
 check('valid token 200', r.code === 200);
+check('select includes charging/ssid', db.calls.some((c) => c.p === '/rest/v1/phonelocation_locations' && c.search.includes('charging') && c.search.includes('ssid')));
 check('desc rows reversed to asc', r.body[0].ts < r.body[1].ts);
 r = mockRes(); await locations(mockReq('GET', {}, null, { token: 'at_654321', since: 'not-a-date' }), r);
 check('bad since 400', r.code === 400);
@@ -182,7 +183,7 @@ check('POST rejected 405', r.code === 405);
 db.calls = [];
 r = mockRes(); await poll(mockReq('GET', dkHeader, null, { device: 'test', wait: '0' }), r);
 check('no pending command → 204', r.code === 204 && r.ended);
-check('poll writes heartbeat upsert', db.calls.some((c) => c.p === '/rest/v1/devices' && c.body.device === 'test' && c.body.last_seen));
+check('poll writes heartbeat upsert', db.calls.some((c) => c.p === '/rest/v1/phonelocation_devices' && c.body.device === 'test' && c.body.last_seen));
 
 // 长轮询即时命中: 排入命令后 poll(有挂线时间) 应首轮即返回, 不睡眠
 r = mockRes(); await command(mockReq('POST', {}, { device: 'test' }, { token: 'at_654321' }), r);

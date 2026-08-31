@@ -38,7 +38,7 @@ export default async function handler(req, res) {
   }
 
   const qs = new URLSearchParams({
-    select: 'ts,device,provider,lat,lng,accuracy,speed,bearing,battery',
+    select: 'ts,device,provider,lat,lng,accuracy,speed,bearing,battery,charging,ssid',
     order: 'ts.desc',
     limit: String(limit),
   });
@@ -46,7 +46,7 @@ export default async function handler(req, res) {
 
   let r;
   try {
-    r = await fetch(`${sbUrl}/rest/v1/locations?${qs}`, {
+    r = await fetch(`${sbUrl}/rest/v1/phonelocation_locations?${qs}`, {
       headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}` },
     });
   } catch (e) {

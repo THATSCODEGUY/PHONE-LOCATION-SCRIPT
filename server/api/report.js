@@ -104,7 +104,7 @@ export default async function handler(req, res) {
 
   let r;
   try {
-    r = await fetch(`${sbUrl}/rest/v1/locations`, {
+    r = await fetch(`${sbUrl}/rest/v1/phonelocation_locations`, {
       method: 'POST',
       headers: {
         apikey: sbKey,
@@ -128,14 +128,14 @@ export default async function handler(req, res) {
   // 上报成功后的跟进操作: 销单 + 刷新 last_report 心跳 (失败不影响上报本身)
   try {
     if (cmdId !== null) {
-      const rp = await fetch(`${sbUrl}/rest/v1/commands?id=eq.${cmdId}&status=eq.claimed`, {
+      const rp = await fetch(`${sbUrl}/rest/v1/phonelocation_commands?id=eq.${cmdId}&status=eq.claimed`, {
         method: 'PATCH',
         headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
         body: JSON.stringify({ status: 'done', done_at: new Date().toISOString() }),
       });
       if (!rp.ok) console.error(`report: ack cmd ${cmdId} failed ${rp.status}`);
     }
-    await fetch(`${sbUrl}/rest/v1/devices?on_conflict=device`, {
+    await fetch(`${sbUrl}/rest/v1/phonelocation_devices?on_conflict=device`, {
       method: 'POST',
       headers: { apikey: sbKey, Authorization: `Bearer ${sbKey}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
       body: JSON.stringify({ device, last_report: row.ts, last_seen: new Date().toISOString() }),

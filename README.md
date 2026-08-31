@@ -26,7 +26,7 @@ VERCEL (serverless, 零依赖 Node)                          │
  └─ public/map.html  面板: 获取位置/心跳在线/任意刷新间隔/低精度过滤│
         │ service_role (仅存于 Vercel 环境变量)              │
         ▼                                                 │
-SUPABASE: locations(轨迹+充电+SSID) + commands(命令) + devices(心跳) + RLS全锁
+SUPABASE(可与其他项目共用): phonelocation_locations(轨迹+充电+SSID) + phonelocation_commands(命令) + phonelocation_devices(心跳) + RLS全锁
 ```
 
 **主动模式时延**：命令到达 0~3 秒 + GPS 锁星 5~15 秒 + 上报 1~3 秒 ≈ **室外 8~25 秒**。
@@ -53,9 +53,9 @@ CHANGELOG.md   版本历史
 
 ### 2. Supabase
 
-1. supabase.com 新建项目（区域选香港/新加坡）
+1. supabase.com 新建项目（区域选香港/新加坡），**或复用现有项目**——本系统所有表一律 `phonelocation_` 前缀，与其他项目共存互不干扰
 2. SQL Editor → 粘贴 `server/supabase/schema.sql` 全文 → Run（幂等，老库重跑即升级）
-3. Settings → API → 记下 **Project URL** 和 **service_role** 密钥（⚠ 绝密）
+3. Settings → API → 记下 **Project URL** 和 **service_role** 密钥（⚠ 绝密；共用项目时即该项目的钥匙，能读写库里全部表）
 
 ### 3. 生成两把密钥
 
@@ -124,7 +124,7 @@ https://xxx.vercel.app/map?token=<ACCESS_TOKEN>[&interval=30]
 
 - 双密钥分离 + 时序安全比对；**仓库（即使公有）不含任何密钥与数据**——钥匙只在 Vercel/Supabase 后台，数据只在 Supabase
 - RLS 全锁 + 零公开策略；service_key 永不出服务端
-- 命令队列原子领取（`FOR UPDATE SKIP LOCKED`），10 分钟 TTL 自动过期
+- 共用库靠 `phonelocation_` 表前缀隔离；命令队列原子领取（`FOR UPDATE SKIP LOCKED`），10 分钟 TTL 自动过期
 
 ## 调优
 

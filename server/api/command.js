@@ -30,7 +30,7 @@ export default async function handler(req, res) {
     const device = String(body.device || 'primary').slice(0, 64);
     let r;
     try {
-      r = await fetch(`${sbUrl}/rest/v1/commands`, {
+      r = await fetch(`${sbUrl}/rest/v1/phonelocation_commands`, {
         method: 'POST',
         headers: { ...sbHeaders, Prefer: 'return=representation' },
         body: JSON.stringify({ device, type: 'locate' }),
@@ -60,7 +60,7 @@ export default async function handler(req, res) {
       const id = parseInt(req.query.id, 10);
       if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'invalid id' });
       const rc = await fetch(
-        `${sbUrl}/rest/v1/commands?id=eq.${id}&select=id,status,type,device,created_at,claimed_at,done_at&limit=1`,
+        `${sbUrl}/rest/v1/phonelocation_commands?id=eq.${id}&select=id,status,type,device,created_at,claimed_at,done_at&limit=1`,
         { headers: sbHeaders },
       ).catch(() => null);
       if (rc && rc.ok) {
@@ -70,7 +70,7 @@ export default async function handler(req, res) {
     }
 
     const rh = await fetch(
-      `${sbUrl}/rest/v1/devices?device=eq.${encodeURIComponent(device)}&select=device,last_seen,last_report&limit=1`,
+      `${sbUrl}/rest/v1/phonelocation_devices?device=eq.${encodeURIComponent(device)}&select=device,last_seen,last_report&limit=1`,
       { headers: sbHeaders },
     ).catch(() => null);
     if (rh && rh.ok) {

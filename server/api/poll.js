@@ -38,7 +38,7 @@ export default async function handler(req, res) {
 
   // 心跳: 每次进入即刷新 (长轮询每 ~wait 秒必然重连, 心跳粒度 ≈ wait)
   try {
-    await fetch(`${sbUrl}/rest/v1/devices?on_conflict=device`, {
+    await fetch(`${sbUrl}/rest/v1/phonelocation_devices?on_conflict=device`, {
       method: 'POST',
       headers: { ...sbHeaders, Prefer: 'resolution=merge-duplicates' },
       body: JSON.stringify({ device, last_seen: new Date().toISOString() }),
@@ -50,7 +50,7 @@ export default async function handler(req, res) {
   // 懒清理: 过期未领取的命令标记 expired
   try {
     const before = new Date(Date.now() - CMD_TTL_MS).toISOString();
-    await fetch(`${sbUrl}/rest/v1/commands?status=eq.pending&created_at=lt.${before}`, {
+    await fetch(`${sbUrl}/rest/v1/phonelocation_commands?status=eq.pending&created_at=lt.${before}`, {
       method: 'PATCH',
       headers: { ...sbHeaders, Prefer: 'return=minimal' },
       body: JSON.stringify({ status: 'expired' }),
@@ -63,7 +63,7 @@ export default async function handler(req, res) {
   do {
     let r;
     try {
-      r = await fetch(`${sbUrl}/rest/v1/rpc/claim_next_command`, {
+      r = await fetch(`${sbUrl}/rest/v1/rpc/phonelocation_claim_next_command`, {
         method: 'POST',
         headers: sbHeaders,
         body: JSON.stringify({ p_device: device }),

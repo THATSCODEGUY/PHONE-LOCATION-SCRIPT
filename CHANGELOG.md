@@ -1,5 +1,13 @@
 # 更新日志
 
+## v2.2.2 — Supabase 共用库表前缀（phonelocation_）
+
+- **共用数据库适配**：本系统所有表/视图/RPC/索引一律 `phonelocation_` 小写前缀（`phonelocation_locations` / `phonelocation_commands` / `phonelocation_devices` / `phonelocation_v_latest_location` / `phonelocation_claim_next_command()`），与其他项目共用同一 Supabase 项目互不干扰（小写免引号，规避 Postgres 大小写折叠坑）
+- 服务端 4 个 API 的数据库 REST 路径全量同步（report/poll/command/locations，含 RPC 调用）
+- **修复**：`locations.js` 的 select 字段漏掉 `charging`/`ssid`，导致地图状态卡永远显示不出充电/Wi-Fi（v2.2.0 遗留 bug）
+- 测试 43 → **44 项**（新增 select 字段回归用例）
+- ⚠ 若曾用旧版 schema 建过无前缀表，重跑新 schema 后旧表不会自动删除，可手动清理
+
 ## v2.2.1 — 仓库地址固化（首次上线）
 
 - `install.sh` 的 `REPO_BASE` 写入真实仓库 `THATSCODEGUY/PHONE-LOCATION-SCRIPT`，手机一键安装命令开箱即用

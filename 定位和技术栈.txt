@@ -1,4 +1,38 @@
 
+
+
+
+
+
+推送成功。验证 raw 直链成活（install.sh + 中文文件名的保活清单——后者 URL 编码最容易出问题）：
+% WebFetch https://raw.githubusercontent.com/THATSCODEGUY/PHONE-LOCATION-SCRIPT/main/phone-termux/install.sh
+% WebFetch https://raw.githubusercontent.com/THATSCODEGUY/PHONE-LOCATION-SCRIPT/main/phone-termux/HYPEROS-%E4%BF%9D%E6%B4%BB%E6%B8%85%E5%8D%95.md
+GitHub 侧全部完成 ✅
+检查项	结果
+首次推送	main 分支已建立，4 个 commit 全部上库（v1.0.0 → v2.2.1）
+raw 直链 · install.sh	✓ 正常服务，真实仓库地址已生效
+raw 直链 · 保活清单（中文名+URL编码）	✓ 正常服务
+本地工作区	干净——本轮只是推送，无文件改动，无需新 commit
+仓库地址：https://github.com/THATSCODEGUY/PHONE-LOCATION-SCRIPT （以后每次改代码，git push 一条命令即同步）
+接下来轮到你的三件事
+① Supabase（约 5 分钟）
+- supabase.com → New project（区域选香港或新加坡，数据库密码设一个记住的）
+- SQL Editor → 粘贴 server/supabase/schema.sql 全文 → Run → 绿色 Success
+- Settings → API → 抄下两样：Project URL + service_role key（⚠ 是长的那个，不是 anon public）
+② 生成两把密钥（1 分钟）
+openssl rand -hex 32   # 第1次 → DEVICE_KEY
+openssl rand -hex 32   # 第2次 → ACCESS_TOKEN
+（Git Bash 可直接跑；PowerShell 用：-join ((1..64) | ForEach-Object { '{0:x}' -f (Get-Random -Max 16) })）
+③ Vercel（约 5 分钟）
+1. vercel.com → 用 GitHub 登录 → Add New Project → Import PHONE-LOCATION-SCRIPT
+2. Root Directory 改成 server（最关键的一步，漏了必失败）
+3. Environment Variables 填 4 个：SUPABASE_URL / SUPABASE_SERVICE_KEY / DEVICE_KEY / ACCESS_TOKEN
+4. Deploy → 等约 1 分钟 → 拿到 https://xxx.vercel.app
+部署完成后把 vercel.app 域名发我（不用发密钥），我帮你做全链路验收；然后手机 Termux 粘一条命令就装好了。
+
+
+-------------------
+
 你漏了什么（两处）
 1. 生成两把自家密钥（Vercel 要填 4 个变量，其中 2 个是你自己造的）：
       openssl rand -hex 32   # 第1次 → DEVICE_KEY（手机用）
