@@ -190,7 +190,7 @@ class MainActivity : Activity() {
         statusText = TextView(this).apply {
             textSize = 14f
             setTextColor(0xFFE6EBF5.toInt())
-            setLineSpacing(dp(4), 1f)
+            setLineSpacing(dp(4).toFloat(), 1f)
             setPadding(0, dp(12), 0, dp(16))
         }
         wrap.addView(statusText)
@@ -261,7 +261,7 @@ class MainActivity : Activity() {
     private fun scroll(child: LinearLayout): ScrollView = ScrollView(this).apply {
         addView(child)
         setBackgroundColor(0xFF0F1420.toInt())
-        fillViewport = true
+        setFillViewport(true)
     }
 
     private fun head(t: String): TextView = TextView(this).apply {
@@ -281,7 +281,7 @@ class MainActivity : Activity() {
         text = t
         textSize = 12f
         setTextColor(0xFF64748B.toInt())
-        setLineSpacing(dp(3), 1f)
+        setLineSpacing(dp(3).toFloat(), 1f)
         setPadding(0, dp(16), 0, 0)
     }
 
