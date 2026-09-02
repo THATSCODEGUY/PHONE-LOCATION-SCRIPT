@@ -24,11 +24,11 @@ class Locator(private val ctx: Context) {
 
     /** GPS -> 网络 -> 最近已知(10分钟内) 三级降级 */
     @SuppressLint("MissingPermission")
-    fun get(gpsTimeoutSec: Int = 15, netTimeoutSec: Int = 10): Fix? {
+    fun get(gpsTimeoutSec: Int = 15, netTimeoutSec: Int = 10, lastKnownMaxMs: Long = 10 * 60 * 1000L): Fix? {
         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
         listenOnce(lm, LocationManager.GPS_PROVIDER, gpsTimeoutSec)?.let { return toFix(it) }
         listenOnce(lm, LocationManager.NETWORK_PROVIDER, netTimeoutSec)?.let { return toFix(it) }
-        return lastKnown(lm, 10 * 60 * 1000L)?.let { toFix(it) }
+        return lastKnown(lm, lastKnownMaxMs)?.let { toFix(it) }
     }
 
     private fun toFix(l: Location) = Fix(

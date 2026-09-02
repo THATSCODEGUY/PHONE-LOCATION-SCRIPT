@@ -62,7 +62,7 @@ adb shell appops set %PKG% SCHEDULE_EXACT_ALARM allow
 adb shell dumpsys deviceidle whitelist +%PKG%
 
 echo [6/7] Writing config and starting service...
-adb shell am start -n %PKG%/.MainActivity --es api_base "%API_BASE%" --es device_key "%DEVICE_KEY%" --es device_name "redmi-note15pro" --ei passive_min 60
+adb shell am start -n %PKG%/.MainActivity --es api_base "%API_BASE%" --es device_key "%DEVICE_KEY%" --es device_name "primary" --ei passive_min 60
 
 echo [7/7] Setting device owner (anti-uninstall / anti-force-stop)...
 adb shell dpm set-device-owner --user 0 %PKG%/.DeviceAdmin

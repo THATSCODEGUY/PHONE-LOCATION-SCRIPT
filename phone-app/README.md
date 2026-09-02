@@ -43,7 +43,7 @@ bat 自动完成：安装 → 定位/通知权限授予（免弹窗）→ 电池
 ```
 while(true):
   1. outbox 补传(失败上报逐条重发)
-  2. 距上次上报 ≥ 被动间隔(60min, 低电量≤20%自动×4) → 定位+上报
+   2. 距上次上报 ≥ 被动间隔(60min, 低电量≤20%×4 / ≤5%×8 省电, ≤5%时每6h刷新末位) → 定位+上报
   3. 长轮询挂线 GET /api/poll?wait=45 (X-Device-Key)
      └ 收到命令 → 立即定位+上报(带cmd_id销单) → 地图 8~25 秒出新点
 ```
@@ -62,4 +62,4 @@ while(true):
 | 设备所有者设置失败 | 手机退出全部账号（含小米账号）后重跑 bat；或跳过（代价：重启后手动开一次 App） |
 | 心跳在线但定位慢 | 室内 GPS 弱，等网络定位兜底（10 秒）或到窗边 |
 | 地图「失联」 | 看 App 状态页「最近结果」；飞机模式/欠费/服务器 Deploy 失败三类最常见 |
-| 想解除设备所有者 | `adb shell dpm remove-active-admin com.thatscodeguy.phonelocation/.DeviceAdmin` 或恢复出厂 |
+| 想解除设备所有者 | App 状态页一键「解除设备所有者」(v2.3.1+)；或电脑 `adb shell dpm remove-active-admin com.thatscodeguy.phonelocation/.DeviceAdmin` |

@@ -77,7 +77,7 @@
     return;
   }
 
-  var HB_OFFLINE_MS = 3 * 60 * 1000;   // 心跳超过3分钟判定失联 (长轮询粒度~50s)
+  var HB_OFFLINE_MS = 5 * 60 * 1000;   // 心跳超过5分钟判定失联 (定位尝试+网络抖动余量)
   var DEFAULT_INTERVAL = 15;            // 默认刷新秒数, 可被 URL/localStorage 覆盖
   var LOCATE_TIMEOUT_MS = 75 * 1000;    // 获取位置按钮超时
   var LOCATE_POLL_MS = 2000;

@@ -2,6 +2,8 @@ package com.thatscodeguy.phonelocation
 
 import android.Manifest
 import android.app.Activity
+import android.app.admin.DevicePolicyManager
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Typeface
@@ -44,8 +46,16 @@ class MainActivity : Activity() {
             intent.getStringExtra("device_name")?.let { Prefs.setDeviceName(this, it) }
             val pm = intent.getIntExtra("passive_min", 0)
             if (pm > 0) Prefs.setPassiveMin(this, pm)
-            TrackerService.start(this)
-            Toast.makeText(this, "配置完成，定位服务已启动", Toast.LENGTH_LONG).show()
+            if (TrackerService.hasLocationPermission(this)) {
+                TrackerService.start(this)
+                Toast.makeText(this, "配置完成，定位服务已启动", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(
+                    this,
+                    "配置已写入，但缺少定位权限：设置→应用管理→PhoneLocation→权限→位置→始终允许，然后在App里点重启服务",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
             showStatus()
             return
         }
@@ -201,8 +211,8 @@ class MainActivity : Activity() {
             toast("已触发测试上报")
         }, weight())
         row1.addView(button("重启服务") {
-            TrackerService.start(this)
-            toast("服务已重启")
+            val ok = TrackerService.start(this)
+            toast(if (ok) "服务已重启" else "缺少定位权限：设置→应用管理→PhoneLocation→权限 开启后重试")
         }, weight())
         wrap.addView(row1)
 
@@ -215,6 +225,12 @@ class MainActivity : Activity() {
             showConfig()
         }, weight())
         wrap.addView(row2)
+
+        if (isDeviceOwner()) {
+            wrap.addView(button("解除设备所有者(恢复可卸载/可强停)") {
+                releaseOwner()
+            })
+        }
 
         wrap.addView(
             hint(
@@ -246,8 +262,30 @@ class MainActivity : Activity() {
             append("最后上报: ").append(if (last == 0L) "无" else ago(last)).append('\n')
             append("最近结果: ").append(Prefs.lastResult(this@MainActivity).ifEmpty { "-" }).append('\n')
             append("轮询次数: ").append(Prefs.pollCount(this@MainActivity)).append('\n')
-            append("待补传: ").append(Outbox.size(this@MainActivity)).append(" 条")
+            append("待补传: ").append(Outbox.size(this@MainActivity)).append(" 条\n")
+            append("设备所有者: ").append(if (isDeviceOwner()) "已启用(防杀防卸载)" else "未启用")
         }
+    }
+
+    private fun dpm(): DevicePolicyManager =
+        getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+
+    private fun isDeviceOwner(): Boolean =
+        try {
+            dpm().isDeviceOwnerApp(packageName)
+        } catch (_: Exception) {
+            false
+        }
+
+    @Suppress("DEPRECATION")
+    private fun releaseOwner() {
+        try {
+            dpm().clearDeviceOwnerApp(packageName)
+            toast("已解除设备所有者，App 恢复为普通应用")
+        } catch (e: Exception) {
+            toast("解除失败: ${e.message}")
+        }
+        updateStatus()
     }
 
     /* ---------------- UI 小件 ---------------- */

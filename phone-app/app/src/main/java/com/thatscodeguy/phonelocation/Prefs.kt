@@ -20,10 +20,10 @@ object Prefs {
         sp(ctx).edit().putString("device_key", v.trim()).apply()
 
     fun deviceName(ctx: Context): String =
-        sp(ctx).getString("device_name", "redmi-note15pro")!!
+        sp(ctx).getString("device_name", "primary")!!
 
     fun setDeviceName(ctx: Context, v: String) =
-        sp(ctx).edit().putString("device_name", v.trim().ifEmpty { "redmi-note15pro" }).apply()
+        sp(ctx).edit().putString("device_name", v.trim().ifEmpty { "primary" }).apply()
 
     fun passiveMin(ctx: Context): Int {
         val v = sp(ctx).getInt("passive_min", 60)
@@ -51,4 +51,9 @@ object Prefs {
 
     fun setPollCount(ctx: Context, v: Long) =
         sp(ctx).edit().putLong("poll_count", v).apply()
+
+    fun lastDyingBreathAt(ctx: Context): Long = sp(ctx).getLong("dying_breath_at", 0L)
+
+    fun setLastDyingBreathAt(ctx: Context, v: Long) =
+        sp(ctx).edit().putLong("dying_breath_at", v).apply()
 }

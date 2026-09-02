@@ -1,5 +1,6 @@
 package com.thatscodeguy.phonelocation
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlarmManager
 import android.app.Notification
@@ -10,6 +11,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
@@ -29,14 +31,23 @@ class TrackerService : Service() {
         const val POLL_HANG_SEC = 45
         const val WATCHDOG_MIN = 15L
         const val LOW_BATTERY_PCT = 20
+        const val DYING_BATTERY_PCT = 5
+        const val DYING_REPEAT_MS = 6L * 3600_000
 
         @Volatile
         var aliveSince: Long = 0L
 
-        fun start(ctx: Context) {
-            try {
+        fun hasLocationPermission(ctx: Context): Boolean =
+            ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                ctx.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+        fun start(ctx: Context): Boolean {
+            if (!Prefs.configured(ctx) || !hasLocationPermission(ctx)) return false
+            return try {
                 ctx.startForegroundService(Intent(ctx, TrackerService::class.java))
+                true
             } catch (_: Exception) {
+                false
             }
         }
 
@@ -81,7 +92,14 @@ class TrackerService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(NOTIF_ID, buildNotification("启动中…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        try {
+            startForeground(NOTIF_ID, buildNotification("启动中…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        } catch (e: Exception) {
+            Prefs.setLastResult(this, "服务启动失败:缺少定位权限,请到 设置→应用管理→PhoneLocation→权限→位置→始终允许")
+            aliveSince = 0L
+            stopSelf()
+            return
+        }
         holdWakeLock()
         aliveSince = System.currentTimeMillis()
         scheduleWatchdog(this)
@@ -131,6 +149,15 @@ class TrackerService : Service() {
                     locateAndReport(null)
                 }
 
+                // 临终遗言: 电量≤5%且未充电时, 每6小时强制刷新一次最后已知位置
+                val (batt, charging) = batteryState()
+                if (batt != null && batt <= DYING_BATTERY_PCT && charging == false &&
+                    now - Prefs.lastDyingBreathAt(this) >= DYING_REPEAT_MS
+                ) {
+                    Prefs.setLastDyingBreathAt(this, now)
+                    locateAndReport(null)
+                }
+
                 val device = URLEncoder.encode(Prefs.deviceName(this), "UTF-8")
                 val r = Http.get(
                     Prefs.apiBase(this) + "/api/poll?device=$device&wait=$POLL_HANG_SEC",
@@ -162,7 +189,9 @@ class TrackerService : Service() {
     /* ---------------- 定位 + 上报 (cmdId 非空则销单) ---------------- */
 
     private fun locateAndReport(cmdId: Long?) {
-        val fix = locator.get()
+        val fix = locator.get(
+            lastKnownMaxMs = if (cmdId != null) 24L * 3600_000 else 10L * 60_000,
+        )
         if (fix == null) {
             Prefs.setLastResult(this, "定位失败(GPS+网络均无结果)")
             return
@@ -236,7 +265,10 @@ class TrackerService : Service() {
     private fun passiveIntervalMs(): Long {
         var min = Prefs.passiveMin(this).toLong()
         val (batt, charging) = batteryState()
-        if (batt != null && batt <= LOW_BATTERY_PCT && charging == false) min *= 4
+        if (batt != null && charging == false) {
+            if (batt <= DYING_BATTERY_PCT) min *= 8
+            else if (batt <= LOW_BATTERY_PCT) min *= 4
+        }
         return min * 60_000
     }
 
