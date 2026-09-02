@@ -1,5 +1,24 @@
 # 更新日志
 
+## v2.3.0 — Phase A：原生 App 工业版（手机端零维护）
+
+**新增 phone-app/ 完整可编译工程**
+- Kotlin 前台服务 App（minSdk 29 / target 34，**零第三方依赖**，纯系统 API，国行无 GMS 完全兼容）
+- 三层保活：前台常驻服务(START_STICKY) + 15 分钟精确闹钟看门狗（无精确闹钟权限自动降级 setAlarmClock）+ 开机自启广播
+- 复用服务端同一套已验收 API（report/poll）：GPS→网络→最近已知三级定位降级，断网 outbox 落盘补传
+- 上报 battery/charging/ssid 完整环境信息；低电量(≤20%)被动间隔自动×4，充电恢复
+- **adb 零操作配置口**：`setup-phone.bat` 一条脚本完成 安装→权限授予(免弹窗)→电池白名单→精确闹钟→写入配置→启动服务
+- L3 设备所有者：bat 第 7 步 `dpm set-device-owner` 防卸载/防强停/开机必自启（恢复出厂或 remove-active-admin 可解除）
+- 固定签名密钥入库（PKCS12，30 年），CI 构建的 APK 永远可覆盖升级不丢配置
+
+**CI 构建链**
+- GitHub Actions 云端编译（无需本地 Android Studio）；push 自动构建，打 `v*` tag 自动发 Release 挂 APK，手机浏览器直接下载
+
+**文档**
+- `phone-app/README.md` 重写（装配流程/三层保活/排查）；根 README 手机端改为 A 主推 + B 备胎双方案
+
+**服务端零改动**（复用 9/9 线上验收的 API 链路）
+
 ## v2.2.2 — Supabase 共用库表前缀（phonelocation_）
 
 - **共用数据库适配**：本系统所有表/视图/RPC/索引一律 `phonelocation_` 小写前缀（`phonelocation_locations` / `phonelocation_commands` / `phonelocation_devices` / `phonelocation_v_latest_location` / `phonelocation_claim_next_command()`），与其他项目共用同一 Supabase 项目互不干扰（小写免引号，规避 Postgres 大小写折叠坑）

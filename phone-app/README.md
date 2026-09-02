@@ -1,23 +1,65 @@
-# Phase A · Kotlin 工业版驻留 App（规格）
+# Phase A · 原生 App 工业版（手机端零维护）
 
-> 交付条件：phone-termux（B 方案）已稳定运行 ≥ 1 周，确认服务端链路无问题后，本目录生成完整可编译工程。B 方案与 A 方案共用同一套 API，可无缝切换/并存。
+> Termux（方案 B）的保活天花板是用户空间 App，HyperOS 一杀就死。本方案是**系统级前台服务**：常驻通知划不掉、被杀系统重拉、开机自启，配合看门狗闹钟三层保险。**电脑装配一次，此后手机端永不操作。**
 
-## 与 Termux 版的差异（为什么要升级）
+## 与 Termux 方案对比
 
-| 项 | Termux (B) | Kotlin App (A) |
+| 项 | Termux (B, 备胎) | 原生 App (A, 主推) |
 |---|---|---|
-| 驻留 | 依赖用户保活设置 | 前台服务 + WorkManager 双保险，系统级 |
-| 定位 | termux-location 单点 | FusedLocationProvider 融合定位 |
-| 断网 | 落盘 outbox 补传 | Room 数据库 + 自动补传 |
-| 电量策略 | 无 | 低电量自动降频(5min→30min)，充电恢复 |
-| 响铃指令 | 无 | 服务端下发指令，手机最大音量响铃 |
-| 换 SIM | 无 | 检测 SIM 变更上报，附带新号码 |
+| 驻留原理 | 用户空间脚本 + 保活清单 | 前台服务 + START_STICKY + 精确闹钟看门狗 + 开机广播 |
+| 手机端操作 | 多（权限/锁定/省电逐项） | **电脑一条 bat，手机零点击** |
+| 定位 | termux-location | 系统 LocationManager（GPS→网络→最近已知 三级降级） |
+| 断网 | outbox.jsonl | 同设计（应用私有目录落盘补传） |
+| 防卸载/强停 | 无 | 设备所有者模式可封死 |
+| 升级 | 重跑安装命令 | 下载新 APK 覆盖装（固定签名，配置不丢） |
 
-## 工程范围（届时生成）
+## 电脑装配（推荐路径，10 分钟）
 
-- Kotlin + minSdk 29，目标 Redmi Note 15 Pro (HyperOS)
-- 前台常驻服务（通知栏）+ WorkManager 周期定位双通道
-- 断网 Room 缓存补传，时间窗 30 天对齐服务端校验
-- 开机自启（RECEIVE_BOOT_COMPLETED + 前台服务）
-- 深度电池优化引导页（引导用户白名单，等于内置保活清单）
-- 构建：Android Studio 打开即编译，无第三方密钥依赖
+1. **下载 APK**：GitHub → Releases → 最新版 → `PhoneLocation-vX.Y.Z.apk` → 放到一个文件夹
+2. **下载 adb**：搜 "Android platform-tools" 官方下载解压，把 adb.exe 所在目录加入 PATH（或丢进同一文件夹）
+3. **手机开 USB 调试**：设置 → 我的设备 → 全部参数 → 连点「OS 版本」7 次 → 开发者选项 → USB 调试开
+4. **数据线连电脑**，手机弹「允许 USB 调试」点允许
+5. 把仓库 `phone-app/setup-phone.bat` + APK（改名 `PhoneLocation.apk`）放同一目录，**双击运行 bat**，按提示粘贴一次 DEVICE_KEY
+
+bat 自动完成：安装 → 定位/通知权限授予（免弹窗）→ 电池白名单 → 精确闹钟 → 写入配置启动服务 → 设备所有者（防卸载/强停）。
+
+6. 打开地图 `https://<你的域名>/map?token=<ACCESS_TOKEN>` → 心跳「在线」→ 点 [获取位置] 验收
+
+## 手动安装（无电脑时的备选）
+
+手机浏览器下载 APK 安装 → 打开 App → 填 API_BASE / DEVICE_KEY → 保存并启动 → 权限逐个允许（位置选**始终允许**）→ 手动做两件事：设置里开**自启动** + 省电策略**无限制**。
+
+## 三层保活原理
+
+| 层 | 机制 | 防什么 |
+|---|---|---|
+| 1 | 前台服务（location 类型）+ 常驻通知 | 普通后台清理、划卡片 |
+| 2 | START_STICKY + 15 分钟精确闹钟看门狗（无精确闹钟权限自动降级 setAlarmClock） | 进程被杀后自愈 |
+| 3 | BOOT_COMPLETED 开机广播 | 重启 |
+| + | 设备所有者（L3，可选） | 强停/卸载/重启后自启全封死 |
+
+## 主循环（与服务端已验收 API 完全一致）
+
+```
+while(true):
+  1. outbox 补传(失败上报逐条重发)
+  2. 距上次上报 ≥ 被动间隔(60min, 低电量≤20%自动×4) → 定位+上报
+  3. 长轮询挂线 GET /api/poll?wait=45 (X-Device-Key)
+     └ 收到命令 → 立即定位+上报(带cmd_id销单) → 地图 8~25 秒出新点
+```
+
+## CI 构建（维护者用）
+
+- push 到 main → GitHub Actions 自动编译，Artifacts 里取 APK
+- 打 tag（`git tag v2.3.0 && git push --tags`）→ 自动创建 Release 挂 APK，手机浏览器直接下载
+- 签名：`signing/app.p12`（固定入库，30 年有效期，密码 phonelocation）——升级包永远可覆盖安装
+
+## 排查速查
+
+| 症状 | 处理 |
+|---|---|
+| bat 找不到 adb | platform-tools 未加 PATH，或 adb.exe 没和 bat 同目录 |
+| 设备所有者设置失败 | 手机退出全部账号（含小米账号）后重跑 bat；或跳过（代价：重启后手动开一次 App） |
+| 心跳在线但定位慢 | 室内 GPS 弱，等网络定位兜底（10 秒）或到窗边 |
+| 地图「失联」 | 看 App 状态页「最近结果」；飞机模式/欠费/服务器 Deploy 失败三类最常见 |
+| 想解除设备所有者 | `adb shell dpm remove-active-admin com.thatscodeguy.phonelocation/.DeviceAdmin` 或恢复出厂 |

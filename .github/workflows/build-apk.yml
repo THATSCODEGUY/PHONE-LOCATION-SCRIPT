@@ -1,0 +1,47 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build release APK
+        run: gradle -p phone-app :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: |
+          VERSION=$(grep -oP 'versionName = "\K[^"]+' phone-app/app/build.gradle.kts)
+          mv phone-app/app/build/outputs/apk/release/app-release.apk "PhoneLocation-v${VERSION}.apk"
+          ls -la PhoneLocation-*.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PhoneLocation-APK
+          path: "PhoneLocation-*.apk"
+
+      - name: Create Release on tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          APK=$(ls PhoneLocation-*.apk)
+          gh release create "$TAG" --title "$TAG" --notes "手机浏览器直接下载 APK 覆盖安装即可升级，配置不丢。" "$APK"

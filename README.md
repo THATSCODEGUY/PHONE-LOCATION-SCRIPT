@@ -36,10 +36,10 @@ SUPABASE(可与其他项目共用): phonelocation_locations(轨迹+充电+SSID) 
 
 ```
 server/        部署到 Vercel 的根目录（Root Directory 设为此）
-phone-termux/  手机 Termux 脚本（install.sh 一键下载安装）
-phone-app/     Kotlin 工业版（A 方案·B 验证稳定后交付）
+phone-app/     原生 App 工业版（主推：电脑一条 bat 装配，装完手机零维护）
+phone-termux/  Termux 脚本方案（备胎：无电脑装配时用）
 docs/          Phase 0 系统级兜底清单（必读）
-tests/         42 项逻辑自测
+tests/         44 项逻辑自测
 CHANGELOG.md   版本历史
 ```
 
@@ -84,15 +84,15 @@ curl -X POST https://xxx.vercel.app/api/report \
 curl "https://xxx.vercel.app/api/locations?token=<ACCESS_TOKEN>&limit=10"
 ```
 
-### 6. 手机端（Termux 一条命令）
+### 6. 手机端（二选一）
 
-1. F-Droid 安装 **Termux / Termux:API / Termux:Boot** 三件套，各打开一次（⚠ 不要 Google Play 版）
-2. Termux 里粘这一条（已写死仓库地址，开箱即用）：
+**方案 A · 原生 App（主推，零维护）**：电脑连一次数据线，运行 `phone-app/setup-phone.bat` 一键完成 安装 → 授权(免弹窗) → 配置 → 启动 → 防卸载，此后手机端永不再操作。详见 `phone-app/README.md`。
+
+**方案 B · Termux 脚本（备胎，无电脑时）**：F-Droid 装 Termux / Termux:API / Termux:Boot 三件套后粘一条命令：
    ```bash
    bash -c "$(curl -sSL https://raw.githubusercontent.com/THATSCODEGUY/PHONE-LOCATION-SCRIPT/main/phone-termux/install.sh)"
    ```
-   它会自动：下载 report/setup/agent/watchdog + 保活清单 → 解到 `$HOME/phone-loc/` → 运行 setup.sh 交互安装
-3. **逐项完成 `HYPEROS-保活清单.md`**（含 §8 agent 专项检查，决定生死）
+   装完必须逐项完成 `HYPEROS-保活清单.md`（用户空间保活，稳定性弱于方案 A）
 
 ### 7. 打开地图
 
