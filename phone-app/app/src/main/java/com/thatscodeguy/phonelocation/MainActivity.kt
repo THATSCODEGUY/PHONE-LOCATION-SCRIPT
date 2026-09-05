@@ -263,7 +263,7 @@ class MainActivity : Activity() {
             append("最近结果: ").append(Prefs.lastResult(this@MainActivity).ifEmpty { "-" }).append('\n')
             append("轮询次数: ").append(Prefs.pollCount(this@MainActivity)).append('\n')
             append("待补传: ").append(Outbox.size(this@MainActivity)).append(" 条\n")
-            append("设备所有者: ").append(if (isDeviceOwner()) "已启用(防杀防卸载)" else "未启用")
+            append("设备所有者: ").append(if (isDeviceOwner()) "已启用(系统级保护)" else "未启用")
         }
     }
 

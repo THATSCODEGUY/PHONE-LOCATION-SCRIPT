@@ -52,8 +52,8 @@ object Prefs {
     fun setPollCount(ctx: Context, v: Long) =
         sp(ctx).edit().putLong("poll_count", v).apply()
 
-    fun lastDyingBreathAt(ctx: Context): Long = sp(ctx).getLong("dying_breath_at", 0L)
+    fun lastPowerGuardAt(ctx: Context): Long = sp(ctx).getLong("power_guard_at", 0L)
 
-    fun setLastDyingBreathAt(ctx: Context, v: Long) =
-        sp(ctx).edit().putLong("dying_breath_at", v).apply()
+    fun setLastPowerGuardAt(ctx: Context, v: Long) =
+        sp(ctx).edit().putLong("power_guard_at", v).apply()
 }

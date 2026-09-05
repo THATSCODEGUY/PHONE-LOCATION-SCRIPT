@@ -185,7 +185,7 @@
         }
         if (st === 'expired') {
           resetLocateBtn();
-          toast('手机未响应：可能离线或后台被杀，请查看保活清单', true);
+          toast('手机未响应：可能离线或后台被清理，请稍后重试', true);
           return;
         }
         if (Date.now() > deadline) {

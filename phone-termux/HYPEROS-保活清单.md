@@ -19,7 +19,7 @@
 - [ ] 权限管理 → Termux → **通知** → 允许（常驻通知是保活的一部分）
 - [ ] Termux:API、Termux:Boot 同样允许通知和自启动
 
-## 2. 防杀后台（决定脚本能活着）
+## 2. 防后台清理（决定脚本能持续运行）
 
 - [ ] 最近任务界面 → 找到 Termux 卡片 → **长按 → 锁定**（出现挂锁图标）
 - [ ] 设置 → 应用设置 → 应用管理 → Termux → **省电策略 → 无限制**
@@ -73,7 +73,7 @@ dos2unix ~/phone-loc/*.sh
 
 - [ ] Termux 执行 `pgrep -f agent.sh` → 有 PID 输出
 - [ ] `tail -n 20 ~/phone-loc/agent.log` → 能看到"守护启动"记录，无异常刷屏
-- [ ] `tail -n 5 ~/phone-loc/watchdog.log` → 无频繁"已重启"刷屏（有则说明 agent 老被杀）
+- [ ] `tail -n 5 ~/phone-loc/watchdog.log` → 无频繁"已重启"刷屏（有则说明 agent 老被回收）
 - [ ] 点一次地图 [获取位置] → agent.log 出现"收到命令 #N ... 完成"
 - [ ] 手动杀掉测试自愈：`pkill -f agent.sh` → 等 16 分钟看 watchdog.log 被拉起（或手动 `nohup bash ~/phone-loc/agent.sh >/dev/null 2>&1 &`）
 

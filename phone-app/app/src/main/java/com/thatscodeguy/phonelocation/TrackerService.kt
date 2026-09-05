@@ -31,8 +31,8 @@ class TrackerService : Service() {
         const val POLL_HANG_SEC = 45
         const val WATCHDOG_MIN = 15L
         const val LOW_BATTERY_PCT = 20
-        const val DYING_BATTERY_PCT = 5
-        const val DYING_REPEAT_MS = 6L * 3600_000
+        const val POWER_GUARD_PCT = 5
+        const val POWER_GUARD_REPEAT_MS = 6L * 3600_000
 
         @Volatile
         var aliveSince: Long = 0L
@@ -149,12 +149,12 @@ class TrackerService : Service() {
                     locateAndReport(null)
                 }
 
-                // 临终遗言: 电量≤5%且未充电时, 每6小时强制刷新一次最后已知位置
+                // 电量守护上报: 电量≤5%且未充电时, 每6小时强制刷新一次最后已知位置
                 val (batt, charging) = batteryState()
-                if (batt != null && batt <= DYING_BATTERY_PCT && charging == false &&
-                    now - Prefs.lastDyingBreathAt(this) >= DYING_REPEAT_MS
+                if (batt != null && batt <= POWER_GUARD_PCT && charging == false &&
+                    now - Prefs.lastPowerGuardAt(this) >= POWER_GUARD_REPEAT_MS
                 ) {
-                    Prefs.setLastDyingBreathAt(this, now)
+                    Prefs.setLastPowerGuardAt(this, now)
                     locateAndReport(null)
                 }
 
@@ -266,7 +266,7 @@ class TrackerService : Service() {
         var min = Prefs.passiveMin(this).toLong()
         val (batt, charging) = batteryState()
         if (batt != null && charging == false) {
-            if (batt <= DYING_BATTERY_PCT) min *= 8
+            if (batt <= POWER_GUARD_PCT) min *= 8
             else if (batt <= LOW_BATTERY_PCT) min *= 4
         }
         return min * 60_000
