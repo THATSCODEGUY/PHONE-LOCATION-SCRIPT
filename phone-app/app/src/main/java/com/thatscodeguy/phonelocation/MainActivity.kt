@@ -247,7 +247,15 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        if (::statusText.isInitialized) updateStatus()
+        if (::statusText.isInitialized) {
+            if (Prefs.configured(this) && TrackerService.aliveSince == 0L &&
+                TrackerService.hasLocationPermission(this)
+            ) {
+                TrackerService.start(this)
+                android.os.Handler(mainLooper).postDelayed({ updateStatus() }, 1500)
+            }
+            updateStatus()
+        }
     }
 
     private fun updateStatus() {

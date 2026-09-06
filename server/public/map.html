@@ -52,8 +52,10 @@
 <div class="panel" id="panel">正在加载…</div>
 <div class="btns">
   <button class="btn primary" id="btnLocate" title="让手机立即上报一次最新位置（通常 8~25 秒）">获取位置</button>
+  <button class="btn primary" id="btnNav" title="跳转 Google 地图导航到目标最新位置" disabled>Google 导航</button>
   <button class="btn active" id="btnFollow" title="自动跟随最新位置">跟随</button>
   <button class="btn" id="btnCenter" title="居中到最新位置">居中</button>
+  <button class="btn" id="btnMe" title="标注我的位置（浏览器定位，不可用时退回IP粗定位）">我的位置</button>
   <button class="btn" id="btnReload" title="重新拉取全部轨迹">刷新全量</button>
   <button class="btn active" id="btnLowAcc" title="隐藏精度较差(>150m)的轨迹段">隐藏低精度</button>
   <select class="btn" id="selInterval" title="地图自动刷新间隔">
@@ -154,6 +156,51 @@
     render();
   };
 
+  /* ---------- 我的位置 + Google 导航 ---------- */
+  var meLat = null, meLng = null, meMarker = null;
+  var btnNav = document.getElementById('btnNav');
+  document.getElementById('btnMe').onclick = function () {
+    if (navigator.geolocation) {
+      toast('正在获取我的位置…');
+      navigator.geolocation.getCurrentPosition(function (pos) {
+        setMe(pos.coords.latitude, pos.coords.longitude, '浏览器定位');
+      }, function () { ipLocate(); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
+    } else ipLocate();
+  };
+  function ipLocate() {
+    toast('浏览器定位不可用，改用 IP 粗定位…');
+    fetch('https://ipapi.co/json/')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.latitude && j.longitude) setMe(j.latitude, j.longitude, 'IP 粗定位');
+        else toast('无法获取我的位置', true);
+      })
+      .catch(function () { toast('IP 定位失败', true); });
+  }
+  function setMe(lat, lng, src) {
+    meLat = lat; meLng = lng;
+    if (!meMarker) {
+      meMarker = L.circleMarker([lat, lng], {
+        radius: 8, color: '#fff', weight: 2, fillColor: '#34d399', fillOpacity: 1
+      }).addTo(map);
+    }
+    meMarker.setLatLng([lat, lng]);
+    meMarker.bindPopup('<b>我的位置</b><br>来源: ' + esc(src));
+    toast('我的位置已标注 (' + src + ')');
+    renderStatus();
+  }
+  btnNav.onclick = function () {
+    var l = track[track.length - 1];
+    if (!l) { toast('还没有目标位置', true); return; }
+    window.open('https://www.google.com/maps/dir/?api=1&destination=' + l.lat + ',' + l.lng, '_blank');
+  };
+  function distKm(a, b) {
+    var R = 6371, dLat = (b[0] - a[0]) * Math.PI / 180, dLng = (b[1] - a[1]) * Math.PI / 180;
+    var s = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(a[0] * Math.PI / 180) * Math.cos(b[0] * Math.PI / 180) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+  }
+
   /* ---------- 获取位置（主动模式） ---------- */
   var btnLocate = document.getElementById('btnLocate');
   btnLocate.onclick = function () {
@@ -239,6 +286,7 @@
 
   /* ---------- 渲染 ---------- */
   function render() {
+    btnNav.disabled = !track.length;
     if (!track.length) return;
     var pts = [], good = [], bad = [];
     track.forEach(function (r) {
@@ -295,6 +343,10 @@
     if (l) {
       html += '<div class="row"><span class="k">设备</span><span class="v">' + esc(l.device || 'primary') + '</span></div>';
       html += '<div class="row"><span class="k">最后轨迹点</span><span class="v">' + esc(ago(l.ts)) + '</span></div>';
+      if (meLat != null) {
+        var dk = distKm([meLat, meLng], [l.lat, l.lng]);
+        html += '<div class="row"><span class="k">与我相距</span><span class="v">' + (dk < 1 ? Math.round(dk * 1000) + ' m' : dk.toFixed(2) + ' km') + '</span></div>';
+      }
       if (l.battery != null) html += '<div class="row"><span class="k">电量</span><span class="v">' + Math.round(l.battery) + '%' + (l.battery <= 20 ? ' ⚠' : '') + '</span></div>';
       if (l.charging != null) html += '<div class="row"><span class="k">充电</span><span class="v">' + (l.charging ? '⚡ 充电中' : '未充电') + '</span></div>';
       if (l.ssid) html += '<div class="row"><span class="k">Wi-Fi</span><span class="v">' + esc(l.ssid) + '</span></div>';
