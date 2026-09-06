@@ -33,8 +33,6 @@
   .btn:hover:not(:disabled) { border-color: #4f8cff; color: #fff; }
   .btn.active { border-color: #4f8cff; color: #4f8cff; }
   .btn:disabled { opacity: .55; cursor: wait; }
-  .btn.primary { border-color: #4f8cff; background: rgba(79,140,255,.18); color: #9cc0ff; font-weight: 600; }
-  .btn.primary:disabled { color: #9cc0ff; }
   select.btn { min-width: 118px; appearance: none; text-align: center; }
   select.btn option { background: #101624; }
   .footer { margin-top: 8px; padding-top: 8px; border-top: 1px solid #2a3752; color: #64748b; font-size: 11px; }
@@ -51,8 +49,8 @@
 <div id="map"></div>
 <div class="panel" id="panel">正在加载…</div>
 <div class="btns">
-  <button class="btn primary" id="btnLocate" title="让手机立即上报一次最新位置（通常 8~25 秒）">获取位置</button>
-  <button class="btn primary" id="btnNav" title="跳转 Google 地图导航到目标最新位置" disabled>Google 导航</button>
+  <button class="btn" id="btnLocate" title="让手机立即上报一次最新位置（通常 8~25 秒）">获取位置</button>
+  <button class="btn" id="btnNav" title="跳转 Google 地图导航到目标最新位置" disabled>Google 导航</button>
   <button class="btn active" id="btnFollow" title="自动跟随最新位置">跟随</button>
   <button class="btn" id="btnCenter" title="居中到最新位置">居中</button>
   <button class="btn" id="btnMe" title="标注我的位置（浏览器定位，不可用时退回IP粗定位）">我的位置</button>
