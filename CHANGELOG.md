@@ -1,5 +1,29 @@
 # 更新日志
 
+## v2.4.1 — App 端省费落地 + 移除 Termux 备胎（单一手机端收敛）
+
+**背景**：v2.4.0 只修了服务端与 Termux 端，但实际在跑的唯一手机端是 **PhoneLocation App**——其 `TrackerService` 挂线 45s 且 204 后立即重连，服务端钳制后占空比仍 ~75%，月耗 ~380 GB-Hrs 依旧超标。本版补齐 App 侧修复，并按决策删除弃用的 Termux 备胎方案（仓库清洁；躺在仓库里本不耗额度，真凶始终是"正在运行的客户端"）。
+
+**PhoneLocation App（versionCode 5）**
+- `TrackerService.kt`：挂线 `POLL_HANG_SEC` 45→**5s**（与服务端硬限一致）
+- 新增轮询间隙 `POLL_GAP_MS=25s`（正常返回后强制休眠）→ **占空比 ~15%**（原 ~100%）
+- 新增**工作窗口**：仅周一~五 **08:00~20:00** 运行；窗口外循环休眠（每 10 分钟醒来看表），通知栏显示"窗口外休眠"，同时暂停被动上报/补传/电量守护
+- 窗口常量集中在 companion object（`WORK_START_MIN`/`WORK_END_MIN`），改窗口只动一处
+
+**移除 Termux 备胎**
+- 删除整个 `phone-termux/`（agent/setup/report/watchdog/install.sh + HYPEROS-保活清单）
+- `.gitignore`/`.gitattributes` 同步清理；根 README 重写为单一 App 方案（架构图/部署/调优表/升级流程/边界表）；phase0 清单 L1 行更新
+- docs/技术实现全记录.md 中的 Termux 提及为历史演进记录，保留不动
+
+**地图页**
+- [获取位置] 超时 75→**90s**（给轮询间隙留余量）；两处"8~25 秒"文案改为"约 0.5~1 分钟"并注明夜间/周末休眠期无响应
+
+**用量测算（周一~五 08:00~20:00）**
+- 窗口 264h/月 × ~15% 占空比 × 2GB ≈ **~80 GB-Hrs/月**（上限 360，22%）🟢
+- Active CPU ≈ 2.5h/4h 🟢；Invocations ≈ 30K/1M 🟢
+
+**升级指引**：push 后打 tag `v2.4.1` → CI 自动发 Release 挂 APK → 手机浏览器下载覆盖安装（同签名配置保留，`MY_PACKAGE_REPLACED` 自动重启服务）。验收：窗口外通知栏显示"窗口外休眠"；Vercel Usage 曲线夜间躺平。
+
 ## v2.4.0 — 免费额度省费（短轮询占空比 + 工作窗口，解除 Vercel Fluid 超标警报）
 
 **背景**：免费版 Fluid Provisioned Memory 达 492.4 / 360 GB-Hrs（136.8% 🔴）、Active CPU 3h26m / 4h（85.8% 🟡）。根因：手机端 agent 长轮询挂线 50s 且 204 后 1 秒内立即重连，函数 7×24 常驻；29K 次调用 × 平均 ~61s ≈ 246 小时存活 × 2GB = 492 GB-Hrs，与账单分毫吻合。**注意：Hobby 版函数内存固定 2GB 不可配置**（vercel.json 写 memory 会被忽略并警告），故省费只能压"挂线时长"。

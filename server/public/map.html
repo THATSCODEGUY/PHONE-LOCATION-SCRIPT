@@ -49,7 +49,7 @@
 <div id="map"></div>
 <div class="panel" id="panel">正在加载…</div>
 <div class="btns">
-  <button class="btn" id="btnLocate" title="让手机立即上报一次最新位置（通常 8~25 秒）">获取位置</button>
+  <button class="btn" id="btnLocate" title="让手机立即上报一次最新位置（通常 0.5~1 分钟，夜间/周末休眠期无响应）">获取位置</button>
   <button class="btn" id="btnNav" title="跳转 Google 地图导航到目标最新位置" disabled>Google 导航</button>
   <button class="btn active" id="btnFollow" title="自动跟随最新位置">跟随</button>
   <button class="btn" id="btnCenter" title="居中到最新位置">居中</button>
@@ -79,7 +79,7 @@
 
   var HB_OFFLINE_MS = 5 * 60 * 1000;   // 心跳超过5分钟判定失联 (定位尝试+网络抖动余量)
   var DEFAULT_INTERVAL = 15;            // 默认刷新秒数, 可被 URL/localStorage 覆盖
-  var LOCATE_TIMEOUT_MS = 75 * 1000;    // 获取位置按钮超时
+  var LOCATE_TIMEOUT_MS = 90 * 1000;    // 获取位置按钮超时 (v2.4.1 轮询间隙 25s, 预留 90s)
   var LOCATE_POLL_MS = 2000;
 
   var map = L.map('map', { zoomControl: true }).setView([35.0, 105.0], 4);
@@ -212,7 +212,7 @@
       .then(function (r) { if (!r.ok) throw new Error('创建命令失败 HTTP ' + r.status); return r.json(); })
       .then(function (cmd) {
         if (!cmd.id) throw new Error('创建命令失败');
-        toast('命令已排队，手机通常 8~25 秒内响应');
+        toast('命令已排队，手机通常 0.5~1 分钟内响应');
         pollCmd(cmd.id, Date.now() + LOCATE_TIMEOUT_MS);
       })
       .catch(function (e) { resetLocateBtn(); toast(e.message, true); });

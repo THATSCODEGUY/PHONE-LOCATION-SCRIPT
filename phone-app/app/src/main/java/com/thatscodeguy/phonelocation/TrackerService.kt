@@ -20,7 +20,9 @@ import android.os.IBinder
 import android.os.PowerManager
 import org.json.JSONObject
 import java.net.URLEncoder
+import java.time.DayOfWeek
 import java.time.Instant
+import java.time.LocalDateTime
 import kotlin.concurrent.thread
 
 class TrackerService : Service() {
@@ -28,7 +30,13 @@ class TrackerService : Service() {
     companion object {
         const val CHANNEL_ID = "tracker"
         const val NOTIF_ID = 1
-        const val POLL_HANG_SEC = 45
+        // v2.4.1 免费额度省费: 短轮询 + 客户端间隙 → 占空比 ~15% (原 45s 死挂 ≈ 100%)
+        const val POLL_HANG_SEC = 5
+        const val POLL_GAP_MS = 25_000L
+        // 工作窗口: 仅周一~五 WORK_START~WORK_END 运行, 窗口外休眠零额度
+        const val WORK_START_MIN = 8 * 60
+        const val WORK_END_MIN = 20 * 60
+        const val SLEEP_CHUNK_MS = 10 * 60_000L
         const val WATCHDOG_MIN = 15L
         const val LOW_BATTERY_PCT = 20
         const val POWER_GUARD_PCT = 5
@@ -137,11 +145,26 @@ class TrackerService : Service() {
         loopThread = thread(name = "tracker-loop") { loop() }
     }
 
-    /* ---------------- 主循环: 补传 → 被动到点上报 → 长轮询挂线 ---------------- */
+    /* ---------------- 主循环: 工作窗口判定 → 补传 → 被动到点上报 → 短轮询挂线 ---------------- */
+
+    // 工作窗口: 周一~五 且 WORK_START ≤ 当前时刻 < WORK_END
+    private fun inWorkWindow(): Boolean {
+        val now = LocalDateTime.now()
+        if (now.dayOfWeek == DayOfWeek.SATURDAY || now.dayOfWeek == DayOfWeek.SUNDAY) return false
+        val m = now.hour * 60 + now.minute
+        return m >= WORK_START_MIN && m < WORK_END_MIN
+    }
 
     private fun loop() {
         while (running && Prefs.configured(this)) {
             try {
+                // v2.4.1 免费额度省费: 窗口外休眠 (每 10 分钟醒来看表, 不耗服务端额度)
+                if (!inWorkWindow()) {
+                    updateNotif("窗口外休眠 · 周一~五 %02d:00~%02d:00 自动恢复".format(WORK_START_MIN / 60, WORK_END_MIN / 60))
+                    Thread.sleep(SLEEP_CHUNK_MS)
+                    continue
+                }
+
                 val remaining = Outbox.flush(this, Prefs.apiBase(this), Prefs.deviceKey(this))
 
                 val now = System.currentTimeMillis()
@@ -173,6 +196,8 @@ class TrackerService : Service() {
                     Thread.sleep(15_000)
                 }
 
+                // v2.4.1 免费额度省费: 正常返回后强制间隙, 拉低占空比
+                Thread.sleep(POLL_GAP_MS)
                 updateNotif(notifText(remaining))
             } catch (e: InterruptedException) {
                 break
