@@ -3,6 +3,11 @@ import crypto from 'node:crypto';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const CHECK_INTERVAL_MS = 2000;
 const CMD_TTL_MS = 10 * 60 * 1000;
+// v2.4 免费额度省费: 服务端硬限挂线 ≤5s (Hobby 版内存固定 2GB 不可降, 只能压时长)
+const MAX_WAIT_S = 5;
+// 过期清扫时间门控: 每个暖实例最多 10 分钟扫一次, 不再每次 poll 都扫 (省 Active CPU)
+const SWEEP_GATE_MS = 10 * 60 * 1000;
+let lastSweepMs = 0;
 
 function safeEq(a, b) {
   const ha = crypto.createHash('sha256').update(String(a)).digest();
@@ -25,8 +30,8 @@ export default async function handler(req, res) {
 
   const device = String(req.query.device || 'primary').slice(0, 64);
   let wait = parseInt(req.query.wait, 10);
-  if (!Number.isFinite(wait)) wait = 50;
-  wait = Math.max(0, Math.min(55, wait));
+  if (!Number.isFinite(wait)) wait = MAX_WAIT_S;
+  wait = Math.max(0, Math.min(MAX_WAIT_S, wait));
 
   const sbUrl = (process.env.SUPABASE_URL || '').replace(/\/+$/, '');
   const sbKey = process.env.SUPABASE_SERVICE_KEY || '';
@@ -47,16 +52,19 @@ export default async function handler(req, res) {
     console.error('poll: heartbeat upsert failed', e.message);
   }
 
-  // 懒清理: 过期未领取的命令标记 expired
-  try {
-    const before = new Date(Date.now() - CMD_TTL_MS).toISOString();
-    await fetch(`${sbUrl}/rest/v1/phonelocation_commands?status=eq.pending&created_at=lt.${before}`, {
-      method: 'PATCH',
-      headers: { ...sbHeaders, Prefer: 'return=minimal' },
-      body: JSON.stringify({ status: 'expired' }),
-    });
-  } catch (e) {
-    console.error('poll: expire sweep failed', e.message);
+  // 懒清理: 过期未领取的命令标记 expired (10 分钟门控, 非每次 poll 都扫)
+  if (Date.now() - lastSweepMs > SWEEP_GATE_MS) {
+    lastSweepMs = Date.now();
+    try {
+      const before = new Date(Date.now() - CMD_TTL_MS).toISOString();
+      await fetch(`${sbUrl}/rest/v1/phonelocation_commands?status=eq.pending&created_at=lt.${before}`, {
+        method: 'PATCH',
+        headers: { ...sbHeaders, Prefer: 'return=minimal' },
+        body: JSON.stringify({ status: 'expired' }),
+      });
+    } catch (e) {
+      console.error('poll: expire sweep failed', e.message);
+    }
   }
 
   const deadline = Date.now() + wait * 1000;

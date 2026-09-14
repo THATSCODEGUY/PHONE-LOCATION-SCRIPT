@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # 一键安装 · 在 Termux 中执行: bash setup.sh
-# v2.2: agent 统一守护(长轮询+被动上报) + cron 仅做看门狗
+# v2.4: 免费额度省费 (短轮询+间隙+工作窗口); v2.2: agent 统一守护 + cron 仅做看门狗
 set -euo pipefail
 
 BASEDIR=$(cd "$(dirname "$0")" && pwd)
@@ -39,11 +39,32 @@ fi
 read -rp "    被动上报间隔(分钟, 5~1440) [60]: " PASSIVE_MIN
 PASSIVE_MIN="${PASSIVE_MIN:-60}"
 [[ "$PASSIVE_MIN" =~ ^[0-9]+$ ]] && [ "$PASSIVE_MIN" -ge 5 ] && [ "$PASSIVE_MIN" -le 1440 ] || { echo "间隔须为 5~1440 分钟"; exit 1; }
-read -rp "    主动模式长轮询挂线(秒, 8~55) [50]: " AGENT_INTERVAL
-AGENT_INTERVAL="${AGENT_INTERVAL:-50}"
-[[ "$AGENT_INTERVAL" =~ ^[0-9]+$ ]] && [ "$AGENT_INTERVAL" -ge 8 ] && [ "$AGENT_INTERVAL" -le 55 ] || { echo "挂线须为 8~55 秒"; exit 1; }
+
+echo "    --> 免费额度省费: 短轮询 + 工作窗口 (v2.4)"
+read -rp "    轮询挂线秒数(1~5, 服务端硬限 5) [5]: " POLL_WAIT
+POLL_WAIT="${POLL_WAIT:-5}"
+[[ "$POLL_WAIT" =~ ^[1-5]$ ]] || { echo "挂线须为 1~5 秒"; exit 1; }
+read -rp "    轮询间隙秒数(5~120, 越大越省额度, 定位到点越慢) [25]: " POLL_GAP
+POLL_GAP="${POLL_GAP:-25}"
+[[ "$POLL_GAP" =~ ^[0-9]+$ ]] && [ "$POLL_GAP" -ge 5 ] && [ "$POLL_GAP" -le 120 ] || { echo "间隙须为 5~120 秒"; exit 1; }
+valid_hhmm() { [[ "$1" =~ ^([01][0-9]|2[0-3])[0-5][0-9]$ ]]; }
+read -rp "    工作窗口开始 HHMM [0800]: " WORK_START
+WORK_START="${WORK_START:-0800}"
+valid_hhmm "$WORK_START" || { echo "开始时间须为 HHMM (0000~2359)"; exit 1; }
+read -rp "    工作窗口结束 HHMM [1800]: " WORK_END
+WORK_END="${WORK_END:-1800}"
+valid_hhmm "$WORK_END" || { echo "结束时间须为 HHMM (0000~2359)"; exit 1; }
+[ "$WORK_START" -lt "$WORK_END" ] || { echo "开始须早于结束"; exit 1; }
+read -rp "    工作日(1=周一...7=周日, 支持 1-5 / 1,3,5) [1-5]: " WORK_DAYS
+WORK_DAYS="${WORK_DAYS:-1-5}"
+[[ "$WORK_DAYS" =~ ^[0-9,-]+$ ]] || { echo "工作日格式: 1-5 或 1,3,5"; exit 1; }
+
 grep -q '^PASSIVE_MIN=' "$CONFIG" 2>/dev/null || echo "PASSIVE_MIN='$PASSIVE_MIN'" >> "$CONFIG"
-grep -q '^AGENT_INTERVAL=' "$CONFIG" 2>/dev/null || echo "AGENT_INTERVAL='$AGENT_INTERVAL'" >> "$CONFIG"
+grep -q '^POLL_WAIT=' "$CONFIG" 2>/dev/null || echo "POLL_WAIT='$POLL_WAIT'" >> "$CONFIG"
+grep -q '^POLL_GAP=' "$CONFIG" 2>/dev/null || echo "POLL_GAP='$POLL_GAP'" >> "$CONFIG"
+grep -q '^WORK_START=' "$CONFIG" 2>/dev/null || echo "WORK_START='$WORK_START'" >> "$CONFIG"
+grep -q '^WORK_END=' "$CONFIG" 2>/dev/null || echo "WORK_END='$WORK_END'" >> "$CONFIG"
+grep -q '^WORK_DAYS=' "$CONFIG" 2>/dev/null || echo "WORK_DAYS='$WORK_DAYS'" >> "$CONFIG"
 chmod 600 "$CONFIG"
 
 # shellcheck source=/dev/null
@@ -99,9 +120,10 @@ echo "==> [8/8] 立即试运行一次上报"
 if bash "$BASEDIR/report.sh"; then
   echo ""
   echo "=============================================================="
-  echo " 安装完成! 双模式:"
+  echo " 安装完成! 双模式 (免费额度省费版):"
   echo " · 被动: agent 每 $PASSIVE_MIN 分钟上报一次(时间制, 不受 Doze 影响)"
-  echo " · 主动: 浏览器地图点[获取位置] → 8~25 秒出最新位置"
+  echo " · 主动: 浏览器地图点[获取位置] → 约 0.5~1 分钟出最新位置 (轮询 ${POLL_WAIT}s 挂线 + ${POLL_GAP}s 间隙)"
+  echo " · 窗口: 仅 $WORK_DAYS 的 $WORK_START~$WORK_END 运行, 其余时间休眠 0 额度 (地图显示失联属预期)"
   echo " · 看门狗: cron 每 15 分钟检查 agent, 死了自动拉起"
   echo " 浏览器打开: $API_BASE/map?token=你的访问令牌"
   echo " 下一步: 按 HYPEROS-保活清单.md 逐项设置手机(必须!)"

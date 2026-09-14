@@ -196,6 +196,14 @@ check('long-poll returned without full wait', Date.now() - t0 < 3000);
 r = mockRes(); await poll(mockReq('GET', dkHeader, null, { device: 'test', wait: '0' }), r);
 check('second poll finds nothing → 204', r.code === 204);
 
+// v2.4 免费额度省费: wait 服务端钳制 ≤5s + 过期清扫时间门控
+db.calls = [];
+const tClamp = Date.now();
+r = mockRes(); await poll(mockReq('GET', dkHeader, null, { device: 'test', wait: '50' }), r);
+check('wait>5 clamped server-side → 204 in ≤~6s (old: up to 55s)', r.code === 204 && Date.now() - tClamp < 6500);
+check('expire sweep time-gated (not on every poll)', !db.calls.some((c) => c.p === '/rest/v1/phonelocation_commands' && c.method === 'PATCH' && c.search.includes('created_at=lt.')));
+check('heartbeat still upserted every poll', db.calls.some((c) => c.p === '/rest/v1/phonelocation_devices' && c.body.last_seen));
+
 // ================= command.js =================
 console.log('command.js:');
 r = mockRes(); await command(mockReq('POST', {}, { device: 'test' }, {}), r);

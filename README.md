@@ -1,6 +1,6 @@
-# 手机精准找回系统 · Redmi Note 15 Pro（v2.2 单一守护）
+# 手机精准找回系统 · Redmi Note 15 Pro（v2.4 免费额度省费）
 
-自建定位追踪系统：**被动模式**（稀疏轨迹，月流量 ~1MB）+ **主动模式**（任意浏览器点按钮，8~25 秒出最新位置）。与小米/谷歌官方查找设备（Phase 0 兜底）构成三层防御。
+自建定位追踪系统：**被动模式**（稀疏轨迹，月流量 ~1MB）+ **主动模式**（任意浏览器点按钮，约 0.5~1 分钟出最新位置）。与小米/谷歌官方查找设备（Phase 0 兜底）构成三层防御。
 
 ## 角色速览（两个平台各干各的）
 
@@ -12,15 +12,16 @@
 
 ```
 Redmi Note 15 Pro (HyperOS)
- └─ agent.sh 唯一常驻守护 (时间制被动 + 长轮询主动, 无 cron 定时依赖)
+ └─ agent.sh 唯一常驻守护 (时间制被动 + 短轮询主动, 工作窗口自动睡/醒)
      ├─ 被动: 距上次≥PASSIVE_MIN(60min) → report.sh → POST /api/report
-     └─ 主动: 长轮询挂线50s ←─ GET /api/poll ────────────┐
-             收到[获取位置] → 立即 report.sh(带cmd_id)→销单│
-     cron 仅看门狗: watchdog.sh 每15min检查 agent, 死了拉起 │
-                                                         │
-VERCEL (serverless, 零依赖 Node)                          │
- ├─ api/report.js    上报: 校验+时序安全比对+销单+心跳       │
- ├─ api/poll.js      长轮询: 原子领取命令, maxDuration 60s  │
+     ├─ 主动: 短轮询挂线5s+间隙25s(占空比~17%) ←─ GET /api/poll ─────┐
+     │        收到[获取位置] → 立即 report.sh(带cmd_id)→销单          │
+     ├─ 窗口: 仅周一~五 08:00~18:00 运行, 其外每10分钟醒来看表       │
+     └─ cron 仅看门狗: watchdog.sh 每15min检查 agent, 死了拉起       │
+                                                                    │
+VERCEL (serverless, 零依赖 Node)                                    │
+ ├─ api/report.js    上报: 校验+时序安全比对+销单+心跳               │
+ ├─ api/poll.js      短轮询: 原子领取命令, wait≤5s, maxDuration 15s  │
  ├─ api/command.js   排队[获取位置]/查状态/读心跳 ◀───────────┤
  ├─ api/locations.js 轨迹查询 (ACCESS_TOKEN)                │
  └─ public/map.html  面板: 获取位置/心跳在线/任意刷新间隔/低精度过滤│
@@ -29,8 +30,9 @@ VERCEL (serverless, 零依赖 Node)                          │
 SUPABASE(可与其他项目共用): phonelocation_locations(轨迹+充电+SSID) + phonelocation_commands(命令) + phonelocation_devices(心跳) + RLS全锁
 ```
 
-**主动模式时延**：命令到达 0~3 秒 + GPS 锁星 5~15 秒 + 上报 1~3 秒 ≈ **室外 8~25 秒**。
+**主动模式时延**：命令到达 0~30 秒（轮询间隙）+ GPS 锁星 5~15 秒 + 上报 1~3 秒 ≈ **室外 0.5~1 分钟**。
 **被动上报由活跃循环驱动**，天然不受安卓 Doze 定时器推迟影响（这是 v2.2 的核心加固）。
+**免费额度（v2.4 核心）**：Hobby 版函数内存固定 2GB 不可降，靠「短轮询占空比 ~17% + 工作日窗口」把 Fluid 用量压到 ~75 GB-Hrs/月（上限 360）。夜间/周末手机休眠不上报，地图显示"失联"属预期。
 
 ## 目录
 
