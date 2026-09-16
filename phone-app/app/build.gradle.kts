@@ -42,4 +42,8 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    // AGP 8+ 默认不生成 BuildConfig, MainActivity 状态页需要 VERSION_NAME/VERSION_CODE
+    buildFeatures {
+        buildConfig = true
+    }
 }
