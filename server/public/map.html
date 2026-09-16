@@ -43,6 +43,16 @@
     color: #e6ebf5; padding: 10px 20px; font-size: 13px; display: none; max-width: 86vw; text-align: center;
   }
   #toast.err { border-color: #7f1d1d; color: #fca5a5; }
+  /* v2.4.3 运行控制浮层: 默认隐藏, 点[⚙ 运行控制]展开, 展开时临时盖住状态卡(z-index 更高) */
+  #cfgPanel { z-index: 1100; display: none; }
+  #cfgPanel .cfg-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  #cfgPanel .cfg-close { background: none; border: none; color: #8b97ad; font-size: 13px; cursor: pointer; padding: 2px 6px; }
+  #cfgPanel .cfg-close:hover { color: #fff; }
+  #cfgPanel input[type="time"] {
+    color-scheme: dark; background: #0d1322; color: #e6ebf5;
+    border: 1px solid #2a3752; border-radius: 6px; padding: 4px 6px; font-size: 13px;
+  }
+  #cfgPanel .cfg-line { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -64,14 +74,22 @@
     <option value="60">60 秒刷新</option>
     <option value="custom">自定义…</option>
   </select>
+  <button class="btn" id="btnCfg" title="展开/收起运行控制面板（总开关、工作时段、运行日）">⚙ 运行控制</button>
 </div>
-<div class="panel" id="cfgPanel" style="display:none">
-  <b>运行控制</b> ·
-  开关 <select class="btn" id="cfgEnabled"><option value="1">开</option><option value="0">关</option></select>
-  · 时段 <input type="time" id="cfgStart" value="08:00"> ~ <input type="time" id="cfgEnd" value="20:00">
-  · 日 <span id="cfgDays"></span>
-  <button class="btn" id="btnCfgSave">保存</button>
-  <span id="cfgInfo" style="color:#64748b"></span>
+<div class="panel" id="cfgPanel">
+  <div class="cfg-head">
+    <b>运行控制</b>
+    <button class="cfg-close" id="btnCfgClose" title="收起设置面板">✕ 收起</button>
+  </div>
+  <div class="cfg-line">
+    开关 <select class="btn" id="cfgEnabled"><option value="1">开</option><option value="0">关</option></select>
+    时段 <input type="time" id="cfgStart" value="08:00"> ~ <input type="time" id="cfgEnd" value="20:00">
+  </div>
+  <div class="cfg-line">运行日 <span id="cfgDays"></span></div>
+  <div class="cfg-line">
+    <button class="btn" id="btnCfgSave">保存</button>
+    <span id="cfgInfo" style="color:#64748b"></span>
+  </div>
 </div>
 <div id="toast"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -199,16 +217,26 @@
     fetch('/api/config?token=' + encodeURIComponent(token) + '&device=' + encodeURIComponent(currentDevice()))
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (c) {
-        if (!c) return;
+        if (!c) { toast('读取运行配置失败', true); return; }
+        cfgLoaded = true;
         cfgEnabled.value = c.enabled ? '1' : '0';
         cfgStart.value = minToHHmm(c.work_start);
         cfgEnd.value = minToHHmm(c.work_end);
         cfgBoxesFromDays(c.work_days);
-        document.getElementById('cfgPanel').style.display = 'block';
         renderCfgInfo(c.enabled);
       })
       .catch(function () {});
   }
+  var cfgPanel = document.getElementById('cfgPanel');
+  var cfgLoaded = false;
+  document.getElementById('btnCfg').onclick = function () {
+    if (cfgPanel.style.display === 'block') cfgPanel.style.display = 'none';
+    else {
+      cfgPanel.style.display = 'block';
+      if (!cfgLoaded) loadCfg();
+    }
+  };
+  document.getElementById('btnCfgClose').onclick = function () { cfgPanel.style.display = 'none'; };
   document.getElementById('btnCfgSave').onclick = function () {
     var s = hhmmToMin(cfgStart.value), e = hhmmToMin(cfgEnd.value);
     if (s === null || e === null || s >= e) { toast('开始须早于结束（暂不支持跨午夜）', true); return; }
@@ -225,10 +253,10 @@
       .then(function (j) {
         toast('已保存，手机 32 秒内生效（休眠期 ≤10 分钟）');
         renderCfgInfo(j.enabled);
+        cfgPanel.style.display = 'none';
       })
       .catch(function (er) { toast(er.message || '保存失败', true); });
   };
-  loadCfg();
 
   /* ---------- 按钮 ---------- */
   function setFollow(v) {
