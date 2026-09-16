@@ -191,8 +191,8 @@ class TrackerService : Service() {
         Prefs.setCfgWorkEnd(this, if (start < end) end else 20 * 60)
         Prefs.setCfgWorkDays(this, days)
         Prefs.setCfgVersion(this, ver)
-        Prefs.setLastResult(this, if (enabled) "窗口已更新: $windowText ${daysLabel(days)}" else "定位已停用(地图可开启)")
-        updateNotif(if (enabled) "配置已更新: $windowText" else "远端已停用定位")
+        Prefs.setLastResult(this, if (enabled) "窗口已更新: ${windowText()} ${daysLabel(days)}" else "定位已停用(地图可开启)")
+        updateNotif(if (enabled) "配置已更新: ${windowText()}" else "远端已停用定位")
     }
 
     private fun daysLabel(spec: String): String {
