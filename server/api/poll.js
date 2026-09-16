@@ -67,6 +67,33 @@ export default async function handler(req, res) {
     }
   }
 
+  // v2.4.2 远程配置下发: 仅当客户端携带 cfgver (即 v2.4.2+ App) 且服务端版本更新时捎带,
+  // 旧客户端不发该参数, 行为与历史版本逐字节一致
+  let cfg = null;
+  const cfgver = parseInt(req.query.cfgver, 10);
+  if (Number.isFinite(cfgver)) {
+    try {
+      const rc = await fetch(
+        `${sbUrl}/rest/v1/phonelocation_config?device=eq.${encodeURIComponent(device)}&select=enabled,work_start,work_end,work_days,version&limit=1`,
+        { headers: sbHeaders },
+      );
+      if (rc.ok) {
+        const rows = await rc.json().catch(() => []);
+        if (Array.isArray(rows) && rows.length > 0 && Number(rows[0].version) > cfgver) {
+          cfg = {
+            enabled: rows[0].enabled,
+            work_start: rows[0].work_start,
+            work_end: rows[0].work_end,
+            work_days: rows[0].work_days,
+            version: Number(rows[0].version),
+          };
+        }
+      }
+    } catch (e) {
+      console.error('poll: cfg fetch failed', e.message);
+    }
+  }
+
   const deadline = Date.now() + wait * 1000;
   do {
     let r;
@@ -83,7 +110,9 @@ export default async function handler(req, res) {
     if (r.ok) {
       const rows = await r.json().catch(() => []);
       if (Array.isArray(rows) && rows.length > 0) {
-        return res.status(200).json({ id: rows[0].id, type: rows[0].type, created_at: rows[0].created_at });
+        const out = { id: rows[0].id, type: rows[0].type, created_at: rows[0].created_at };
+        if (cfg) out.cfg = cfg;
+        return res.status(200).json(out);
       }
     } else {
       const t = await r.text().catch(() => '');
@@ -94,5 +123,6 @@ export default async function handler(req, res) {
     await sleep(CHECK_INTERVAL_MS);
   } while (true);
 
+  if (cfg) return res.status(200).json({ cfg });
   return res.status(204).end();
 }

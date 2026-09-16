@@ -12,26 +12,28 @@
 
 ```
 Redmi Note 15 Pro (HyperOS)
- └─ PhoneLocation App 前台服务 (唯一手机端, v2.4.1)
-     ├─ 窗口: 仅周一~五 08:00~20:00 运行, 其外休眠(每10min看表, 零额度) │
+ └─ PhoneLocation App 前台服务 (唯一手机端, v2.4.2)
+     ├─ 配置: 地图「运行控制」远程下发(总开关+时段+星期), 32s内生效        │
      ├─ 被动: 距上次≥60min → 定位+上报 → POST /api/report              │
      ├─ 主动: 短轮询挂线5s+间隙25s(占空比~15%) ←─ GET /api/poll ─────┐  │
      │        收到[获取位置] → 立即定位上报(带cmd_id)→销单            │  │
+     ├─ 休眠: 窗口外/停用时10分钟探活(收配置+紧急命令), 零轨迹零上报   │  │
      └─ 保活: 15min看门狗闹钟 + 开机自启 + 设备所有者(L3)            │  │
                                                                       │  │
 VERCEL (serverless, 零依赖 Node)                                      │  │
  ├─ api/report.js    上报: 校验+时序安全比对+销单+心跳               │  │
  ├─ api/poll.js      短轮询: 原子领取命令, wait≤5s, maxDuration 15s  │  │
+ ├─ api/config.js    运行配置读写(地图「运行控制」面板) ◀───────────────┤
  ├─ api/command.js   排队[获取位置]/查状态/读心跳 ◀────────────────────┤
  ├─ api/locations.js 轨迹查询 (ACCESS_TOKEN)                          │
- └─ public/map.html  面板: 获取位置/心跳在线/任意刷新间隔/低精度过滤  │
+ └─ public/map.html  面板: 获取位置/运行控制/心跳在线/任意刷新间隔    │
          │ service_role (仅存于 Vercel 环境变量)                      │
          ▼                                                           │
-SUPABASE(可与其他项目共用): phonelocation_locations(轨迹+充电+SSID) + phonelocation_commands(命令) + phonelocation_devices(心跳) + RLS全锁
+SUPABASE(可与其他项目共用): phonelocation_locations(轨迹+充电+SSID) + phonelocation_commands(命令) + phonelocation_devices(心跳) + phonelocation_config(远程配置) + RLS全锁
 ```
 
-**主动模式时延**：命令到达 0~30 秒（轮询间隙）+ GPS 锁星 5~15 秒 + 上报 1~3 秒 ≈ **室外 0.5~1 分钟**。
-**免费额度（v2.4.1 核心）**：Hobby 版函数内存固定 2GB 不可降，靠 App「短轮询占空比 ~15% + 工作日 08:00~20:00 窗口」把 Fluid 用量压到 ~80 GB-Hrs/月（上限 360）。夜间/周末手机休眠不上报，地图显示"失联"属预期。
+**主动模式时延**：命令到达 0~30 秒（轮询间隙）+ GPS 锁星 5~15 秒 + 上报 1~3 秒 ≈ **室外 0.5~1 分钟**；休眠/停用期点[获取位置] ≤10 分钟应答（探活粒度）。
+**免费额度（v2.4.2 核心）**：Hobby 版函数内存固定 2GB 不可降，靠「短轮询占空比 ~15% + 地图端可调运行窗口（默认工作日 08:00~20:00）+ 总开关」把 Fluid 用量压到 ~84 GB-Hrs/月（上限 360 的 23%）。
 
 ## 目录
 
@@ -112,6 +114,7 @@ https://xxx.vercel.app/map?token=<ACCESS_TOKEN>[&interval=30]
 |---|---|---|
 | POST /api/report | DEVICE_KEY | 手机上报位置（可携带 cmd_id 销单） |
 | GET /api/poll | DEVICE_KEY | 手机短轮询领命令 + 刷心跳 |
+| GET/POST /api/config | ACCESS_TOKEN | 地图「运行控制」读写总开关/窗口/运行日 |
 | POST/GET /api/command | ACCESS_TOKEN | 浏览器排队命令/查状态/读心跳 |
 | GET /api/locations | ACCESS_TOKEN | 浏览器拉轨迹 |
 
@@ -123,9 +126,10 @@ https://xxx.vercel.app/map?token=<ACCESS_TOKEN>[&interval=30]
 
 | 旋钮 | 位置 | 默认 | 说明 |
 |---|---|---|---|
+| **总开关/时段/运行日** | **地图「运行控制」面板** | 开 · 08:00~20:00 · 周一~五 | 保存后手机 32s 内生效（休眠期 ≤10 分钟），永久免重装 |
 | 被动间隔 | App 配置 `passive_min` | 60 分钟 | 只影响轨迹密度（低电量自动拉长省电） |
 | 轮询节奏 | `TrackerService.kt` 常量 `POLL_HANG_SEC`/`POLL_GAP_MS` | 5s+25s | 占空比 ~15%，省免费额度（勿随意调大挂线） |
-| 工作窗口 | `TrackerService.kt` 常量 `WORK_START_MIN`/`WORK_END_MIN` | 周一~五 08:00~20:00 | 窗口外休眠零额度，地图"失联"属预期 |
+| 探活节奏 | `TrackerService.kt` 常量 `SLEEP_CHUNK_MS` | 10 分钟 | 窗口外/停用期听指令，夜间紧急定位靠它 |
 | 看门狗间隔 | `TrackerService.kt` 常量 `WATCHDOG_MIN` | 15 分钟 | 服务死了闹钟自动拉起 |
 | 地图刷新 | 网页下拉/URL `&interval=` | 15 秒 | 浏览器侧，与手机无关 |
 | 数据清理 | schema.sql 末尾语句 | — | 轨迹留 90 天，命令留 30 天 |
@@ -138,7 +142,7 @@ https://xxx.vercel.app/map?token=<ACCESS_TOKEN>[&interval=30]
 | 场景 | 本系统 | 应对 |
 |---|---|---|
 | 窗口内有电有网 | ✅ 主动 0.5~1min + 被动轨迹 | /map |
-| 夜间/周末休眠期 | ⚠ 不上报，地图显示失联 | 回看最后轨迹 + i.mi.com |
+| 窗口外/停用（探活期） | ⚠ 不留轨迹；[获取位置] ≤10 分钟应答 | /map 点按钮 |
 | 手机关机/被断网 | ❌ 主动被动均失效 | 最后轨迹 + i.mi.com 等上线 |
 | 被刷机/恢复出厂 | ❌ | 小米账号锁 + IMEI 报警 |
 

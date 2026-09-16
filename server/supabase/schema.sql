@@ -87,7 +87,22 @@ with (security_invoker = on) as
   order by ts desc
   limit 1;
 
--- ---------- 6. 维护 ----------
+-- ---------- 6. 远程配置表 (v2.4.2: 地图端改窗口, poll 应答捎带下发) ----------
+-- enabled=false 时手机只保留 10 分钟探活(收指令), 不定位不上报
+create table if not exists public.phonelocation_config (
+  device     text primary key default 'primary',
+  enabled    boolean not null default true,
+  work_start int not null default 480  check (work_start between 0 and 1424),  -- 分钟, 08:00
+  work_end   int not null default 1200 check (work_end between 1 and 1440),    -- 分钟, 20:00
+  work_days  text not null default '1-5',                                       -- 1=周一..7=周日, 支持 1-5/1,3,5
+  version    bigint not null default 1,                                         -- 每次修改+1, 客户端版本比对
+  updated_at timestamptz not null default now(),
+  constraint phonelocation_config_window_chk check (work_start < work_end)
+);
+
+alter table public.phonelocation_config enable row level security;
+
+-- ---------- 7. 维护 ----------
 -- 数据保留 90 天, 手动或 pg_cron 定期执行:
 -- delete from public.phonelocation_locations where ts < now() - interval '90 days';
 -- delete from public.phonelocation_commands where created_at < now() - interval '30 days';

@@ -20,7 +20,6 @@ import android.os.IBinder
 import android.os.PowerManager
 import org.json.JSONObject
 import java.net.URLEncoder
-import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDateTime
 import kotlin.concurrent.thread
@@ -33,9 +32,7 @@ class TrackerService : Service() {
         // v2.4.1 免费额度省费: 短轮询 + 客户端间隙 → 占空比 ~15% (原 45s 死挂 ≈ 100%)
         const val POLL_HANG_SEC = 5
         const val POLL_GAP_MS = 25_000L
-        // 工作窗口: 仅周一~五 WORK_START~WORK_END 运行, 窗口外休眠零额度
-        const val WORK_START_MIN = 8 * 60
-        const val WORK_END_MIN = 20 * 60
+        // v2.4.2: 工作窗口改由地图端远程配置 (Prefs cfg_*), 此处仅保留探活节奏
         const val SLEEP_CHUNK_MS = 10 * 60_000L
         const val WATCHDOG_MIN = 15L
         const val LOW_BATTERY_PCT = 20
@@ -145,22 +142,94 @@ class TrackerService : Service() {
         loopThread = thread(name = "tracker-loop") { loop() }
     }
 
-    /* ---------------- 主循环: 工作窗口判定 → 补传 → 被动到点上报 → 短轮询挂线 ---------------- */
+    /* ---------------- 主循环: 配置判定 → 补传 → 被动到点上报 → 短轮询挂线 ---------------- */
 
-    // 工作窗口: 周一~五 且 WORK_START ≤ 当前时刻 < WORK_END
+    // v2.4.2: 工作日判断, 支持 "1-5" / "1,3,5" / "1-3,5,7" (1=周一 ... 7=周日)
+    private fun dayInSet(dow: Int, spec: String): Boolean {
+        for (part in spec.split(',')) {
+            val p = part.trim()
+            if (p.isEmpty()) continue
+            if (p.contains('-')) {
+                val a = p.substringBefore('-').toIntOrNull() ?: continue
+                val b = p.substringAfter('-').toIntOrNull() ?: continue
+                if (dow in a..b) return true
+            } else {
+                if (p.toIntOrNull() == dow) return true
+            }
+        }
+        return false
+    }
+
+    // v2.4.2: 窗口判定读远程配置 (总开关 + 星期 + 起止), 地图端改完全局生效
     private fun inWorkWindow(): Boolean {
+        if (!Prefs.cfgEnabled(this)) return false
         val now = LocalDateTime.now()
-        if (now.dayOfWeek == DayOfWeek.SATURDAY || now.dayOfWeek == DayOfWeek.SUNDAY) return false
+        if (!dayInSet(now.dayOfWeek.value, Prefs.cfgWorkDays(this))) return false
         val m = now.hour * 60 + now.minute
-        return m >= WORK_START_MIN && m < WORK_END_MIN
+        return m >= Prefs.cfgWorkStart(this) && m < Prefs.cfgWorkEnd(this)
+    }
+
+    private fun windowText(): String {
+        val s = Prefs.cfgWorkStart(this)
+        val e = Prefs.cfgWorkEnd(this)
+        return "%02d:%02d~%02d:%02d".format(s / 60, s % 60, e / 60, e % 60)
+    }
+
+    private fun offWindowText(): String =
+        if (!Prefs.cfgEnabled(this)) "定位已停用 · 10分钟探活中 · 地图可一键开启"
+        else "窗口外休眠 · ${windowText()} · 探活10分钟/次, 到点自动恢复"
+
+    // v2.4.2: 应用地图端下发的新配置 (立即生效, 通知可见)
+    private fun applyCfg(cfg: JSONObject) {
+        val enabled = cfg.optBoolean("enabled", true)
+        val start = cfg.optInt("work_start", 8 * 60).coerceIn(0, 1424)
+        val end = cfg.optInt("work_end", 20 * 60).coerceIn(1, 1440)
+        val days = cfg.optString("work_days", "1-5")
+        val ver = cfg.optLong("version", 0L)
+        Prefs.setCfgEnabled(this, enabled)
+        Prefs.setCfgWorkStart(this, if (start < end) start else 8 * 60)
+        Prefs.setCfgWorkEnd(this, if (start < end) end else 20 * 60)
+        Prefs.setCfgWorkDays(this, days)
+        Prefs.setCfgVersion(this, ver)
+        Prefs.setLastResult(this, if (enabled) "窗口已更新: $windowText ${daysLabel(days)}" else "定位已停用(地图可开启)")
+        updateNotif(if (enabled) "配置已更新: $windowText" else "远端已停用定位")
+    }
+
+    private fun daysLabel(spec: String): String {
+        val names = arrayOf("", "一", "二", "三", "四", "五", "六", "日")
+        val sb = StringBuilder()
+        for (ch in spec) if (ch in '1'..'7') sb.append(names[ch - '0'])
+        return if (sb.isEmpty()) spec else sb.toString()
+    }
+
+    // 统一轮询: 带 cfgver, 应答可含 cfg(配置) 与 id(命令); 返回 null=网络异常
+    private fun pollOnce(waitSec: Int): Http.Resp? {
+        return try {
+            val device = URLEncoder.encode(Prefs.deviceName(this), "UTF-8")
+            val r = Http.get(
+                Prefs.apiBase(this) + "/api/poll?device=$device&wait=$waitSec&cfgver=${Prefs.cfgVersion(this)}",
+                mapOf("X-Device-Key" to Prefs.deviceKey(this)),
+                timeoutMs = (waitSec + 15) * 1000,
+            )
+            Prefs.setPollCount(this, Prefs.pollCount(this) + 1)
+            if (r.ok && !r.body.isNullOrBlank()) {
+                val obj = JSONObject(r.body)
+                if (obj.has("cfg")) applyCfg(obj.getJSONObject("cfg"))
+                if (obj.has("id")) locateAndReport(obj.optLong("id", -1L).takeIf { it > 0 })
+            }
+            r
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun loop() {
         while (running && Prefs.configured(this)) {
             try {
-                // v2.4.1 免费额度省费: 窗口外休眠 (每 10 分钟醒来看表, 不耗服务端额度)
+                // v2.4.2: 窗口外/停用 → 休眠, 但每 10 分钟探活一次 (收新配置 + 紧急定位命令)
                 if (!inWorkWindow()) {
-                    updateNotif("窗口外休眠 · 周一~五 %02d:00~%02d:00 自动恢复".format(WORK_START_MIN / 60, WORK_END_MIN / 60))
+                    updateNotif(offWindowText())
+                    pollOnce(0)
                     Thread.sleep(SLEEP_CHUNK_MS)
                     continue
                 }
@@ -181,18 +250,8 @@ class TrackerService : Service() {
                     locateAndReport(null)
                 }
 
-                val device = URLEncoder.encode(Prefs.deviceName(this), "UTF-8")
-                val r = Http.get(
-                    Prefs.apiBase(this) + "/api/poll?device=$device&wait=$POLL_HANG_SEC",
-                    mapOf("X-Device-Key" to Prefs.deviceKey(this)),
-                    timeoutMs = (POLL_HANG_SEC + 15) * 1000,
-                )
-                Prefs.setPollCount(this, Prefs.pollCount(this) + 1)
-
-                if (r.ok && !r.body.isNullOrBlank()) {
-                    val cmd = JSONObject(r.body)
-                    locateAndReport(cmd.optLong("id", -1L).takeIf { it > 0 })
-                } else if (r.code == -1) {
+                val r = pollOnce(POLL_HANG_SEC)
+                if (r == null || r.code == -1) {
                     Thread.sleep(15_000)
                 }
 

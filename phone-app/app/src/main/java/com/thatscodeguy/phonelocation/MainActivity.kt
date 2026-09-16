@@ -264,6 +264,14 @@ class MainActivity : Activity() {
         val last = Prefs.lastReportAt(this)
         statusText.text = buildString {
             append("服务: ").append(if (alive) "运行中" else "未运行").append('\n')
+            append("版本: ").append(BuildConfig.VERSION_NAME).append(" (").append(BuildConfig.VERSION_CODE).append(")\n")
+            append("定位开关: ").append(if (Prefs.cfgEnabled(this@MainActivity)) "开" else "关（地图可一键开启）").append('\n')
+            run {
+                val ws = Prefs.cfgWorkStart(this@MainActivity)
+                val we = Prefs.cfgWorkEnd(this@MainActivity)
+                append("工作窗口: ").append("%02d:%02d~%02d:%02d".format(ws / 60, ws % 60, we / 60, we % 60))
+                    .append(" 运行日 ").append(Prefs.cfgWorkDays(this@MainActivity)).append('\n')
+            }
             append("服务端: ").append(Prefs.apiBase(this@MainActivity)).append('\n')
             append("设备名: ").append(Prefs.deviceName(this@MainActivity)).append('\n')
             append("被动间隔: ").append(Prefs.passiveMin(this@MainActivity)).append(" 分钟\n")

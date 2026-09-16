@@ -56,4 +56,30 @@ object Prefs {
 
     fun setLastPowerGuardAt(ctx: Context, v: Long) =
         sp(ctx).edit().putLong("power_guard_at", v).apply()
+
+    // v2.4.2 远程配置 (地图端下发, poll 应答捎带)
+    fun cfgEnabled(ctx: Context): Boolean = sp(ctx).getBoolean("cfg_enabled", true)
+
+    fun setCfgEnabled(ctx: Context, v: Boolean) =
+        sp(ctx).edit().putBoolean("cfg_enabled", v).apply()
+
+    fun cfgWorkStart(ctx: Context): Int = sp(ctx).getInt("cfg_work_start", 8 * 60)
+
+    fun setCfgWorkStart(ctx: Context, v: Int) =
+        sp(ctx).edit().putInt("cfg_work_start", v).apply()
+
+    fun cfgWorkEnd(ctx: Context): Int = sp(ctx).getInt("cfg_work_end", 20 * 60)
+
+    fun setCfgWorkEnd(ctx: Context, v: Int) =
+        sp(ctx).edit().putInt("cfg_work_end", v).apply()
+
+    fun cfgWorkDays(ctx: Context): String = sp(ctx).getString("cfg_work_days", "1-5")!!
+
+    fun setCfgWorkDays(ctx: Context, v: String) =
+        sp(ctx).edit().putString("cfg_work_days", v).apply()
+
+    fun cfgVersion(ctx: Context): Long = sp(ctx).getLong("cfg_version", 0L)
+
+    fun setCfgVersion(ctx: Context, v: Long) =
+        sp(ctx).edit().putLong("cfg_version", v).apply()
 }

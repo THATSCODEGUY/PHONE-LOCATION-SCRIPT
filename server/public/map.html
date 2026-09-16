@@ -65,6 +65,14 @@
     <option value="custom">自定义…</option>
   </select>
 </div>
+<div class="panel" id="cfgPanel" style="display:none">
+  <b>运行控制</b> ·
+  开关 <select class="btn" id="cfgEnabled"><option value="1">开</option><option value="0">关</option></select>
+  · 时段 <input type="time" id="cfgStart" value="08:00"> ~ <input type="time" id="cfgEnd" value="20:00">
+  · 日 <span id="cfgDays"></span>
+  <button class="btn" id="btnCfgSave">保存</button>
+  <span id="cfgInfo" style="color:#64748b"></span>
+</div>
 <div id="toast"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
@@ -77,7 +85,7 @@
     return;
   }
 
-  var HB_OFFLINE_MS = 5 * 60 * 1000;   // 心跳超过5分钟判定失联 (定位尝试+网络抖动余量)
+  var HB_OFFLINE_MS = 12 * 60 * 1000;  // 心跳超过12分钟判定失联 (v2.4.2: 休眠期10分钟探活粒度)
   var DEFAULT_INTERVAL = 15;            // 默认刷新秒数, 可被 URL/localStorage 覆盖
   var LOCATE_TIMEOUT_MS = 90 * 1000;    // 获取位置按钮超时 (v2.4.1 轮询间隙 25s, 预留 90s)
   var LOCATE_POLL_MS = 2000;
@@ -131,6 +139,96 @@
     if (!found) selInterval.value = 'custom';
     applyInterval(sec);
   })();
+
+  /* ---------- 运行控制 (v2.4.2: 地图端改窗口/开关, 手机轮询应答自动生效) ---------- */
+  var DAY_NAMES = ['一', '二', '三', '四', '五', '六', '日'];
+  var cfgEnabled = document.getElementById('cfgEnabled');
+  var cfgStart = document.getElementById('cfgStart');
+  var cfgEnd = document.getElementById('cfgEnd');
+  var cfgInfo = document.getElementById('cfgInfo');
+  var dayBoxes = [];
+  (function buildDayBoxes() {
+    var host = document.getElementById('cfgDays');
+    DAY_NAMES.forEach(function (n, i) {
+      var lbl = document.createElement('label');
+      lbl.style.marginRight = '6px';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = String(i + 1);
+      lbl.appendChild(cb);
+      lbl.appendChild(document.createTextNode(n));
+      host.appendChild(lbl);
+      dayBoxes.push(cb);
+    });
+  })();
+  function cfgDaysFromBoxes() {
+    return dayBoxes.filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; }).join(',');
+  }
+  function cfgBoxesFromDays(spec) {
+    var set = {};
+    String(spec || '').split(',').forEach(function (part) {
+      part = part.trim();
+      if (!part) return;
+      if (part.indexOf('-') >= 0) {
+        var a = parseInt(part.split('-')[0], 10), b = parseInt(part.split('-')[1], 10);
+        for (var d = a; d <= b; d++) set[d] = true;
+      } else set[parseInt(part, 10)] = true;
+    });
+    dayBoxes.forEach(function (cb) { cb.checked = !!set[parseInt(cb.value, 10)]; });
+  }
+  function hhmmToMin(v) {
+    var p = String(v || '').split(':');
+    var h = parseInt(p[0], 10), m = parseInt(p[1], 10);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return h * 60 + m;
+  }
+  function minToHHmm(m) {
+    function p(n) { return n < 10 ? '0' + n : n; }
+    return p(Math.floor(m / 60)) + ':' + p(m % 60);
+  }
+  function daysLabel() {
+    var names = dayBoxes.filter(function (cb) { return cb.checked; }).map(function (cb) { return DAY_NAMES[parseInt(cb.value, 10) - 1]; });
+    return names.length === 7 ? '每天' : (names.join('') || '无');
+  }
+  function renderCfgInfo(enabled) {
+    cfgInfo.textContent = enabled
+      ? '当前: 运行 ' + cfgStart.value + '~' + cfgEnd.value + ' ' + daysLabel()
+      : '当前: 定位已停用 (手机保留10分钟探活)';
+  }
+  function loadCfg() {
+    fetch('/api/config?token=' + encodeURIComponent(token) + '&device=' + encodeURIComponent(currentDevice()))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (c) {
+        if (!c) return;
+        cfgEnabled.value = c.enabled ? '1' : '0';
+        cfgStart.value = minToHHmm(c.work_start);
+        cfgEnd.value = minToHHmm(c.work_end);
+        cfgBoxesFromDays(c.work_days);
+        document.getElementById('cfgPanel').style.display = 'block';
+        renderCfgInfo(c.enabled);
+      })
+      .catch(function () {});
+  }
+  document.getElementById('btnCfgSave').onclick = function () {
+    var s = hhmmToMin(cfgStart.value), e = hhmmToMin(cfgEnd.value);
+    if (s === null || e === null || s >= e) { toast('开始须早于结束（暂不支持跨午夜）', true); return; }
+    var days = cfgDaysFromBoxes();
+    if (!days) { toast('至少勾选一个运行日', true); return; }
+    fetch('/api/config?token=' + encodeURIComponent(token) + '&device=' + encodeURIComponent(currentDevice()), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: cfgEnabled.value === '1', work_start: s, work_end: e, work_days: days })
+    })
+      .then(function (r) {
+        return r.ok ? r.json() : r.json().then(function (j) { throw new Error(j.error || '保存失败 HTTP ' + r.status); });
+      })
+      .then(function (j) {
+        toast('已保存，手机 32 秒内生效（休眠期 ≤10 分钟）');
+        renderCfgInfo(j.enabled);
+      })
+      .catch(function (er) { toast(er.message || '保存失败', true); });
+  };
+  loadCfg();
 
   /* ---------- 按钮 ---------- */
   function setFollow(v) {

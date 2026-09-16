@@ -22,6 +22,7 @@ function mockReq(method, headers, body, query = {}) {
 const db = {
   commands: [],
   devices: {},
+  config: {},
   nextCmdId: 1,
   calls: [],
 };
@@ -77,6 +78,18 @@ globalThis.fetch = async (url, opts = {}) => {
     return jres(rows, 200);
   }
 
+  if (p === '/rest/v1/phonelocation_config' && method === 'GET') {
+    const dm = /device=eq\.([\w-]+)/.exec(u.search);
+    const rows = Object.values(db.config).filter((c) => !dm || c.device === dm[1]);
+    return jres(rows, 200);
+  }
+  if (p === '/rest/v1/phonelocation_config' && method === 'POST') {
+    const dev = body.device || 'primary';
+    const row = Object.assign(db.config[dev] || { device: dev }, body);
+    db.config[dev] = row;
+    return jres([row], 201);
+  }
+
   if (p === '/rest/v1/rpc/phonelocation_claim_next_command') {
     const cand = db.commands.filter((c) => c.status === 'pending').sort((a, b) => a.id - b.id)[0];
     if (!cand) return jres([], 200);
@@ -97,6 +110,7 @@ const report = (await import('../server/api/report.js')).default;
 const locations = (await import('../server/api/locations.js')).default;
 const poll = (await import('../server/api/poll.js')).default;
 const command = (await import('../server/api/command.js')).default;
+const config = (await import('../server/api/config.js')).default;
 
 const goodBody = { lat: 39.9042, lng: 116.4074, accuracy: 12, battery: 80, provider: 'gps', device: 'test' };
 const dkHeader = { 'x-device-key': 'dk_123456' };
@@ -203,6 +217,35 @@ r = mockRes(); await poll(mockReq('GET', dkHeader, null, { device: 'test', wait:
 check('wait>5 clamped server-side → 204 in ≤~6s (old: up to 55s)', r.code === 204 && Date.now() - tClamp < 6500);
 check('expire sweep time-gated (not on every poll)', !db.calls.some((c) => c.p === '/rest/v1/phonelocation_commands' && c.method === 'PATCH' && c.search.includes('created_at=lt.')));
 check('heartbeat still upserted every poll', db.calls.some((c) => c.p === '/rest/v1/phonelocation_devices' && c.body.last_seen));
+
+// ================= config.js (v2.4.2 地图端远程配置) =================
+console.log('config.js:');
+r = mockRes(); await config(mockReq('GET', {}, null, {}), r);
+check('config GET no token 401', r.code === 401);
+r = mockRes(); await config(mockReq('GET', {}, null, { token: 'at_654321', device: 'test' }), r);
+check('config GET defaults when no row', r.code === 200 && r.body.enabled === true && r.body.work_start === 480 && r.body.work_days === '1-5' && r.body.version === 0);
+r = mockRes(); await config(mockReq('POST', {}, { work_start: 900, work_end: 800, work_days: '1-5' }, { token: 'at_654321' }), r);
+check('config POST start>=end rejected 400', r.code === 400);
+r = mockRes(); await config(mockReq('POST', {}, { work_start: 420, work_end: 1200, work_days: '0-9' }, { token: 'at_654321' }), r);
+check('config POST bad days rejected 400', r.code === 400);
+r = mockRes(); await config(mockReq('POST', {}, { enabled: 'yes' }, { token: 'at_654321' }), r);
+check('config POST non-boolean enabled 400', r.code === 400);
+r = mockRes(); await config(mockReq('POST', {}, { enabled: true, work_start: 420, work_end: 1200, work_days: '1-5' }, { token: 'at_654321', device: 'test' }), r);
+check('config POST valid → 200 version 1', r.code === 200 && r.body.version === 1 && r.body.work_start === 420);
+r = mockRes(); await config(mockReq('POST', {}, { enabled: false }, { token: 'at_654321', device: 'test' }), r);
+check('config POST disable → version 2', r.code === 200 && r.body.version === 2 && r.body.enabled === false);
+
+// poll cfg 捎带 (v2.4.2): cfgver 比对, 旧客户端零影响
+r = mockRes(); await poll(mockReq('GET', dkHeader, null, { device: 'test', wait: '0', cfgver: '1' }), r);
+check('poll cfgver stale → 200 carries cfg v2', r.code === 200 && r.body.cfg && r.body.cfg.version === 2 && r.body.cfg.enabled === false);
+r = mockRes(); await poll(mockReq('GET', dkHeader, null, { device: 'test', wait: '0' }), r);
+check('poll without cfgver → 204 unchanged (compat)', r.code === 204 && r.ended);
+r = mockRes(); await poll(mockReq('GET', dkHeader, null, { device: 'test', wait: '0', cfgver: '2' }), r);
+check('poll cfgver current → 204 (nothing to push)', r.code === 204);
+r = mockRes(); await command(mockReq('POST', {}, { device: 'test' }, { token: 'at_654321' }), r);
+const cmd4 = r.body.id;
+r = mockRes(); await poll(mockReq('GET', dkHeader, null, { device: 'test', wait: '0', cfgver: '1' }), r);
+check('poll command+cfg both delivered', r.code === 200 && r.body.id === cmd4 && r.body.cfg && r.body.cfg.version === 2);
 
 // ================= command.js =================
 console.log('command.js:');
