@@ -67,8 +67,10 @@ export default async function handler(req, res) {
     }
   }
 
-  // v2.4.2 远程配置下发: 仅当客户端携带 cfgver (即 v2.4.2+ App) 且服务端版本更新时捎带,
+  // v2.4.2 远程配置下发: 仅当客户端携带 cfgver (即 v2.4.2+ App) 且版本不一致时捎带,
   // 旧客户端不发该参数, 行为与历史版本逐字节一致
+  // v2.4.4 修复: 原条件 "> 服务端版本" 在配置行被重建(version 重新从 1 计)时形成死锁——
+  // 手机持有的 cfgver 永远更高, 新配置永久无法送达; 改为 "!=" 双向重同步, 版本对齐即停发
   let cfg = null;
   const cfgver = parseInt(req.query.cfgver, 10);
   if (Number.isFinite(cfgver)) {
@@ -79,7 +81,7 @@ export default async function handler(req, res) {
       );
       if (rc.ok) {
         const rows = await rc.json().catch(() => []);
-        if (Array.isArray(rows) && rows.length > 0 && Number(rows[0].version) > cfgver) {
+        if (Array.isArray(rows) && rows.length > 0 && Number(rows[0].version) !== cfgver) {
           cfg = {
             enabled: rows[0].enabled,
             work_start: rows[0].work_start,

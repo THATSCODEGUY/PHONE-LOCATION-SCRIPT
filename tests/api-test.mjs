@@ -246,6 +246,10 @@ r = mockRes(); await command(mockReq('POST', {}, { device: 'test' }, { token: 'a
 const cmd4 = r.body.id;
 r = mockRes(); await poll(mockReq('GET', dkHeader, null, { device: 'test', wait: '0', cfgver: '1' }), r);
 check('poll command+cfg both delivered', r.code === 200 && r.body.id === cmd4 && r.body.cfg && r.body.cfg.version === 2);
+// v2.4.4 修复: 配置行被重建(version 重新从 1 计)后, 手机 cfgver 高于服务端 → 原条件 ">" 永不送达(死锁),
+// 改 "!=" 双向重同步: 版本不一致(含手机更高)也捎带, 手机回写服务端版本后对齐停发
+r = mockRes(); await poll(mockReq('GET', dkHeader, null, { device: 'test', wait: '0', cfgver: '9' }), r);
+check('poll cfgver higher (server rollback) → carries cfg for resync', r.code === 200 && r.body.cfg && r.body.cfg.version === 2 && r.body.cfg.enabled === false);
 
 // ================= command.js =================
 console.log('command.js:');

@@ -23,8 +23,10 @@
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; }
   .dot.on  { background: #34d399; box-shadow: 0 0 8px #34d399; }
   .dot.off { background: #f87171; box-shadow: 0 0 8px #f87171; }
+  .dot.idle { background: #94a3b8; box-shadow: 0 0 8px #94a3b8; }
   .state-on  { color: #34d399; font-weight: 600; }
   .state-off { color: #f87171; font-weight: 700; }
+  .state-idle { color: #94a3b8; font-weight: 600; }
   .btns { position: absolute; top: 12px; right: 12px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; }
   .btn {
     background: rgba(16,22,36,.92); color: #cdd6e4; border: 1px solid #2a3752;
@@ -103,7 +105,7 @@
     return;
   }
 
-  var HB_OFFLINE_MS = 12 * 60 * 1000;  // 心跳超过12分钟判定失联 (v2.4.2: 休眠期10分钟探活粒度)
+  var HB_OFFLINE_MS = 25 * 60 * 1000;  // 心跳超过25分钟判定失联 (v2.4.4: 探活10分钟/次, 阈值=2.5倍周期, 容忍连丢2次探活+浏览器时钟偏差; v2.4.2旧值12分钟仅留2分钟余量导致窗口外频繁误红)
   var DEFAULT_INTERVAL = 15;            // 默认刷新秒数, 可被 URL/localStorage 覆盖
   var LOCATE_TIMEOUT_MS = 90 * 1000;    // 获取位置按钮超时 (v2.4.1 轮询间隙 25s, 预留 90s)
   var LOCATE_POLL_MS = 2000;
@@ -117,6 +119,8 @@
   var track = [];
   var lastTs = null;
   var heartbeat = null;   // {device, last_seen, last_report}
+  var runCfg = null;      // v2.4.4 三态显示: 远程运行配置 {enabled, work_start, work_end, work_days}
+  var cfgFetchedAt = 0;
   var firstLoad = true;
   var follow = true;
   var marker = null;
@@ -209,9 +213,9 @@
     return names.length === 7 ? '每天' : (names.join('') || '无');
   }
   function renderCfgInfo(enabled) {
-    cfgInfo.textContent = enabled
+    cfgInfo.textContent = (enabled
       ? '当前: 运行 ' + cfgStart.value + '~' + cfgEnd.value + ' ' + daysLabel()
-      : '当前: 定位已停用 (手机保留10分钟探活)';
+      : '当前: 定位已停用 (手机保留10分钟探活)') + ' · 设备 ' + currentDevice();
   }
   function loadCfg() {
     fetch('/api/config?token=' + encodeURIComponent(token) + '&device=' + encodeURIComponent(currentDevice()))
@@ -219,6 +223,7 @@
       .then(function (c) {
         if (!c) { toast('读取运行配置失败', true); return; }
         cfgLoaded = true;
+        runCfg = c;   // v2.4.4: 三态显示共享配置缓存
         cfgEnabled.value = c.enabled ? '1' : '0';
         cfgStart.value = minToHHmm(c.work_start);
         cfgEnd.value = minToHHmm(c.work_end);
@@ -251,6 +256,7 @@
         return r.ok ? r.json() : r.json().then(function (j) { throw new Error(j.error || '保存失败 HTTP ' + r.status); });
       })
       .then(function (j) {
+        if (j && j.ok) { runCfg = j; cfgFetchedAt = Date.now(); }   // v2.4.4: 保存后立即刷新三态判定, 不等下轮节流
         toast('已保存，手机 32 秒内生效（休眠期 ≤10 分钟）');
         renderCfgInfo(j.enabled);
         cfgPanel.style.display = 'none';
@@ -457,12 +463,27 @@
     var online = hbAge !== null && hbAge < HB_OFFLINE_MS;
     var l = track[track.length - 1];
 
+    // v2.4.4 三态: 红=真失联(心跳超25分钟) / 灰=窗口外休眠或已停用但探活健在(正常) / 绿=工作窗口内在线
+    // 红灯从此只代表真异常, 休眠不再是"失联"
+    var inWin = cfgInWindow();
+    var stateTxt, stateCls, dotCls;
+    if (hbAge === null) { stateTxt = '从未上线'; stateCls = 'state-off'; dotCls = 'off'; }
+    else if (!online) { stateTxt = '失联'; stateCls = 'state-off'; dotCls = 'off'; }
+    else if (inWin === false) {
+      stateTxt = (runCfg && runCfg.enabled) ? '窗口外休眠 · 正常' : '已停用 · 探活中';
+      stateCls = 'state-idle'; dotCls = 'idle';
+    }
+    else { stateTxt = '在线'; stateCls = 'state-on'; dotCls = 'on'; }
+
     var html = '';
     if (hbAge === null) {
-      html += '<div class="row"><span class="k"><span class="dot off"></span>状态</span><span class="v state-off">从未上线</span></div>';
+      html += '<div class="row"><span class="k"><span class="dot ' + dotCls + '"></span>状态</span><span class="v ' + stateCls + '">' + stateTxt + '</span></div>';
     } else {
-      html += '<div class="row"><span class="k"><span class="dot ' + (online ? 'on' : 'off') + '"></span>状态</span><span class="v ' + (online ? 'state-on' : 'state-off') + '">' + (online ? '在线' : '失联') + '</span></div>';
+      html += '<div class="row"><span class="k"><span class="dot ' + dotCls + '"></span>状态</span><span class="v ' + stateCls + '">' + stateTxt + '</span></div>';
       html += '<div class="row"><span class="k">心跳</span><span class="v">' + esc(ago(heartbeat.last_seen)) + '</span></div>';
+    }
+    if (dotCls === 'idle' && runCfg) {
+      html += '<div class="row"><span class="k">运行窗口</span><span class="v">' + minToHHmm(runCfg.work_start) + '~' + minToHHmm(runCfg.work_end) + ' ' + esc(daysSpecLabel(runCfg.work_days)) + '</span></div>';
     }
     if (l) {
       html += '<div class="row"><span class="k">设备</span><span class="v">' + esc(l.device || 'primary') + '</span></div>';
@@ -488,6 +509,52 @@
   }
 
   /* ---------- 数据拉取 ---------- */
+  // v2.4.4: 三态状态显示——镜像手机端 inWorkWindow 判定 (enabled + 星期 + 时段, 本地时区)
+  function dayInSet(dow, spec) {
+    var hit = false;
+    String(spec || '').split(',').forEach(function (part) {
+      part = part.trim();
+      if (!part) return;
+      if (part.indexOf('-') >= 0) {
+        var a = parseInt(part.split('-')[0], 10), b = parseInt(part.split('-')[1], 10);
+        if (Number.isFinite(a) && Number.isFinite(b) && a <= dow && dow <= b) hit = true;
+      } else if (parseInt(part, 10) === dow) hit = true;
+    });
+    return hit;
+  }
+  function cfgInWindow() {
+    if (!runCfg) return null;                       // 配置未知 → 维持旧两态语义
+    if (!runCfg.enabled) return false;
+    var now = new Date();
+    var dow = now.getDay() === 0 ? 7 : now.getDay(); // JS: 0=周日 → 手机端 1=周一..7=周日
+    if (!dayInSet(dow, runCfg.work_days)) return false;
+    var m = now.getHours() * 60 + now.getMinutes();
+    return m >= runCfg.work_start && m < runCfg.work_end;
+  }
+  function daysSpecLabel(spec) {
+    var names = ['一', '二', '三', '四', '五', '六', '日'];
+    var out = [];
+    String(spec || '').split(',').forEach(function (part) {
+      part = part.trim();
+      if (!part) return;
+      if (part.indexOf('-') >= 0) {
+        var a = parseInt(part.split('-')[0], 10), b = parseInt(part.split('-')[1], 10);
+        for (var d = a; Number.isFinite(d) && d <= b; d++) out.push(names[d - 1] || d);
+      } else {
+        var x = parseInt(part, 10);
+        if (Number.isFinite(x)) out.push(names[x - 1] || x);
+      }
+    });
+    return '周' + (out.length === 7 ? '一~日' : out.join('周'));
+  }
+  function fetchRunCfg() {                           // 60 秒节流, 与轨迹/心跳刷新并行
+    if (Date.now() - cfgFetchedAt < 60 * 1000) return;
+    cfgFetchedAt = Date.now();
+    fetch('/api/config?token=' + encodeURIComponent(token) + '&device=' + encodeURIComponent(currentDevice()))
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (c) { if (c) runCfg = c; })
+      .catch(function () {});
+  }
   function fetchTrack() {
     var url = '/api/locations?token=' + encodeURIComponent(token) + '&limit=500';
     if (lastTs) url += '&since=' + encodeURIComponent(lastTs);
@@ -515,6 +582,7 @@
   }
 
   function refresh(afterLocate) {
+    fetchRunCfg();
     Promise.all([fetchTrack(), fetchHeartbeat()])
       .then(function () {
         renderStatus();
