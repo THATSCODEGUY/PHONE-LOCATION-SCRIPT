@@ -24,6 +24,7 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.UserManager
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.time.Instant
@@ -242,7 +243,7 @@ class TrackerService : Service() {
         }
         updateNotif(offWindowText())
         thread(name = "probe") {
-            guardDataIfNeeded()   // v2.5.0: 探活前兜底, 睡眠期数据被关也能在10分钟内自动恢复
+            networkGuardTick()   // v2.5.1: 探活前兜底巡检, 睡眠期也保持限制同步与断网留痕
             probePollThrottled()
             // poll 应答可能携带新配置改变了窗口判定, 故 poll 后再定夺
             if (inWorkWindow() && loopThread?.isAlive != true) {
@@ -278,39 +279,57 @@ class TrackerService : Service() {
         }
     }
 
-    /* ---------------- v2.5.0 数据防关守卫 (设备所有者特权, Android 14+) ---------------- */
+    /* ---------------- v2.5.1 网络守卫 (设备所有者特权) ---------------- */
 
-    // 生效三条件: 地图定位总开关=开 + 本App为设备所有者 + Android 14+ (setMobileNetworksEnabled 最低API 34)
-    // 语义: 定位开启期间, 移动数据被任何人手动关闭 → 秒级自动重开; 地图停用定位 → 不再强制(机主自主关数据的唯一通道)
-    // 边界: 飞行模式/拔SIM/关机为物理级, 不可防 (靠锁屏+SIM PIN+i.mi.com 兜底)
-    private fun guardDataIfNeeded() {
-        if (!Prefs.cfgEnabled(this)) return
-        if (Build.VERSION.SDK_INT < 34) return
+    // 事实澄清: Android 无任何公开 API 允许 App(含设备所有者)强制重开被手动关闭的移动数据
+    // (setMobileNetworksEnabled 不存在于 AOSP, v2.5.0 编译失败根因)。
+    // 改为"防关"策略: 定位开启期间施加 DISALLOW_CONFIG_MOBILE_NETWORKS 用户限制,
+    // 尽力阻断系统设置/快捷磁贴的移动网络开关入口(HyperOS 实际效果以真机为准);
+    // 地图停用定位 → 解除限制, 这是机主自由关数据的唯一通道。
+    private fun syncNetworkRestriction() {
         try {
             val dpm = getSystemService(DevicePolicyManager::class.java) ?: return
+            val admin = ComponentName(this, DeviceAdmin::class.java)
             if (!dpm.isDeviceOwnerApp(packageName)) return
+            val want = Prefs.cfgEnabled(this)
+            val has = dpm.getUserRestrictions(admin)
+                .getBoolean(UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS)
+            if (want && !has) {
+                dpm.addUserRestriction(admin, UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS)
+                Prefs.setLastResult(this, "网络守卫: 已限制改动移动网络设置 ${java.time.LocalTime.now().withNano(0)}")
+            } else if (!want && has) {
+                dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS)
+                Prefs.setLastResult(this, "网络守卫: 已恢复移动网络自由(定位停用) ${java.time.LocalTime.now().withNano(0)}")
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    // 网络状态巡检: 断网期间留痕可见(数据被关/无信号), 恢复瞬间由 onAvailable 立即探活秒级回绿
+    private fun networkGuardTick() {
+        syncNetworkRestriction()
+        try {
             val cm = getSystemService(ConnectivityManager::class.java) ?: return
             val caps = cm.getNetworkCapabilities(cm.activeNetwork)
             val online = caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             if (!online) {
-                dpm.setMobileNetworksEnabled(ComponentName(this, DeviceAdmin::class.java), true)
                 val now = System.currentTimeMillis()
-                if (now - lastGuardTraceAt > 5 * 60_000L) {   // 留痕节流, 防无信号场景刷屏
+                if (now - lastGuardTraceAt > 10 * 60_000L) {
                     lastGuardTraceAt = now
-                    Prefs.setLastResult(this, "数据防关: 已强制恢复移动数据 ${java.time.LocalTime.now().withNano(0)}")
+                    Prefs.setLastResult(this, "网络守卫: 当前断网(数据被关/无信号), 恢复后秒级上线 ${java.time.LocalTime.now().withNano(0)}")
                 }
             }
         } catch (_: Exception) {
         }
     }
 
-    // v2.5.0 网络监听: 数据被关→onLost 触发守卫; 网络恢复→立即探活刷新心跳(秒级回绿, 不等下个闹钟/轮询)
+    // v2.5.1 网络监听: 网络恢复→立即探活刷新心跳(秒级回绿, 不等下个闹钟/轮询)
     private fun registerNetGuard() {
         try {
             val cm = getSystemService(ConnectivityManager::class.java) ?: return
             val cb = object : ConnectivityManager.NetworkCallback() {
                 override fun onLost(network: Network) {
-                    guardDataIfNeeded()
+                    networkGuardTick()
                 }
 
                 override fun onAvailable(network: Network) {
@@ -366,6 +385,7 @@ class TrackerService : Service() {
         Prefs.setCfgVersion(this, ver)
         Prefs.setLastResult(this, if (enabled) "窗口已更新: ${windowText()} ${daysLabel(days)}" else "定位已停用(地图可开启)")
         updateNotif(if (enabled) "配置已更新: ${windowText()}" else "远端已停用定位")
+        syncNetworkRestriction()   // v2.5.1: 开关切换即时联动网络限制(开=防关, 关=解禁)
     }
 
     private fun daysLabel(spec: String): String {
@@ -401,7 +421,7 @@ class TrackerService : Service() {
         while (running && Prefs.configured(this) && Thread.currentThread() === loopThread) {
             Prefs.setLastLoopAt(this, System.currentTimeMillis())
             try {
-                guardDataIfNeeded()   // v2.5.0: 每轮兜底, 数据被关→强制重开(回调之外的保险)
+                networkGuardTick()   // v2.5.1: 每轮兜底巡检(限制同步+断网留痕), 回调之外的保险
                 // v2.4.5: 窗口外/停用 → 探活一次后交给精确闹钟接管, 线程干净退出(服务保留前台通知)。
                 // 旧写法 Thread.sleep(10分钟) 在灭屏休眠下计时冻结, 探活停摆数小时, 看门狗见线程"活着"也不救——本次根治
                 if (!inWorkWindow()) {

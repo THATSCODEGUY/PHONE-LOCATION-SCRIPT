@@ -11,8 +11,8 @@ android {
         applicationId = "com.thatscodeguy.phonelocation"
         minSdk = 29
         targetSdk = 34
-        versionCode = 8
-        versionName = "2.5.0"
+        versionCode = 9
+        versionName = "2.5.1"
     }
 
     signingConfigs {
