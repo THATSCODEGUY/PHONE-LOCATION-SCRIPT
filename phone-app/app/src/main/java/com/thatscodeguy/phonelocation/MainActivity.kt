@@ -279,8 +279,19 @@ class MainActivity : Activity() {
             append("最近结果: ").append(Prefs.lastResult(this@MainActivity).ifEmpty { "-" }).append('\n')
             append("轮询次数: ").append(Prefs.pollCount(this@MainActivity)).append('\n')
             append("待补传: ").append(Outbox.size(this@MainActivity)).append(" 条\n")
-            append("设备所有者: ").append(if (isDeviceOwner()) "已启用(系统级保护)" else "未启用")
+            append("设备所有者: ").append(if (isDeviceOwner()) "已启用(系统级保护)" else "未启用").append('\n')
+            append("数据防关: ").append(dataGuardText())
         }
+    }
+
+    // v2.5.0: 数据防关守卫状态 — 定位开启期间移动数据被关将自动重开(设备所有者+Android 14+)
+    private fun dataGuardText(): String = try {
+        if (Build.VERSION.SDK_INT < 34) "不可用(需Android 14+)"
+        else if (!isDeviceOwner()) "不可用(需设备所有者)"
+        else if (Prefs.cfgEnabled(this)) "生效中(定位开启期间数据被关会自动重开)"
+        else "待命(地图开启定位后生效)"
+    } catch (_: Exception) {
+        "未知"
     }
 
     private fun dpm(): DevicePolicyManager =

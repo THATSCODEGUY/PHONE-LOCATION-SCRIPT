@@ -8,11 +8,17 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
 import android.os.Build
@@ -162,6 +168,8 @@ class TrackerService : Service() {
     private var running = true
     private var loopThread: Thread? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
+    private var lastGuardTraceAt = 0L
 
     private val locator by lazy { Locator(this) }
 
@@ -182,6 +190,7 @@ class TrackerService : Service() {
         aliveSince = System.currentTimeMillis()
         scheduleWatchdog(this)
         startLoop()
+        registerNetGuard()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -206,6 +215,12 @@ class TrackerService : Service() {
         running = false
         aliveSince = 0L
         try {
+            netCallback?.let {
+                getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(it)
+            }
+        } catch (_: Exception) {
+        }
+        try {
             wakeLock?.takeIf { it.isHeld }?.release()
         } catch (_: Exception) {
         }
@@ -227,6 +242,7 @@ class TrackerService : Service() {
         }
         updateNotif(offWindowText())
         thread(name = "probe") {
+            guardDataIfNeeded()   // v2.5.0: 探活前兜底, 睡眠期数据被关也能在10分钟内自动恢复
             probePollThrottled()
             // poll 应答可能携带新配置改变了窗口判定, 故 poll 后再定夺
             if (inWorkWindow() && loopThread?.isAlive != true) {
@@ -259,6 +275,58 @@ class TrackerService : Service() {
             } catch (_: Exception) {
             }
             startLoop()
+        }
+    }
+
+    /* ---------------- v2.5.0 数据防关守卫 (设备所有者特权, Android 14+) ---------------- */
+
+    // 生效三条件: 地图定位总开关=开 + 本App为设备所有者 + Android 14+ (setMobileNetworksEnabled 最低API 34)
+    // 语义: 定位开启期间, 移动数据被任何人手动关闭 → 秒级自动重开; 地图停用定位 → 不再强制(机主自主关数据的唯一通道)
+    // 边界: 飞行模式/拔SIM/关机为物理级, 不可防 (靠锁屏+SIM PIN+i.mi.com 兜底)
+    private fun guardDataIfNeeded() {
+        if (!Prefs.cfgEnabled(this)) return
+        if (Build.VERSION.SDK_INT < 34) return
+        try {
+            val dpm = getSystemService(DevicePolicyManager::class.java) ?: return
+            if (!dpm.isDeviceOwnerApp(packageName)) return
+            val cm = getSystemService(ConnectivityManager::class.java) ?: return
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+            val online = caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            if (!online) {
+                dpm.setMobileNetworksEnabled(ComponentName(this, DeviceAdmin::class.java), true)
+                val now = System.currentTimeMillis()
+                if (now - lastGuardTraceAt > 5 * 60_000L) {   // 留痕节流, 防无信号场景刷屏
+                    lastGuardTraceAt = now
+                    Prefs.setLastResult(this, "数据防关: 已强制恢复移动数据 ${java.time.LocalTime.now().withNano(0)}")
+                }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    // v2.5.0 网络监听: 数据被关→onLost 触发守卫; 网络恢复→立即探活刷新心跳(秒级回绿, 不等下个闹钟/轮询)
+    private fun registerNetGuard() {
+        try {
+            val cm = getSystemService(ConnectivityManager::class.java) ?: return
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onLost(network: Network) {
+                    guardDataIfNeeded()
+                }
+
+                override fun onAvailable(network: Network) {
+                    thread(name = "net-recover") {
+                        probePollThrottled()
+                    }
+                }
+            }
+            cm.registerNetworkCallback(
+                NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build(),
+                cb,
+            )
+            netCallback = cb
+        } catch (_: Exception) {
         }
     }
 
@@ -333,6 +401,7 @@ class TrackerService : Service() {
         while (running && Prefs.configured(this) && Thread.currentThread() === loopThread) {
             Prefs.setLastLoopAt(this, System.currentTimeMillis())
             try {
+                guardDataIfNeeded()   // v2.5.0: 每轮兜底, 数据被关→强制重开(回调之外的保险)
                 // v2.4.5: 窗口外/停用 → 探活一次后交给精确闹钟接管, 线程干净退出(服务保留前台通知)。
                 // 旧写法 Thread.sleep(10分钟) 在灭屏休眠下计时冻结, 探活停摆数小时, 看门狗见线程"活着"也不救——本次根治
                 if (!inWorkWindow()) {
