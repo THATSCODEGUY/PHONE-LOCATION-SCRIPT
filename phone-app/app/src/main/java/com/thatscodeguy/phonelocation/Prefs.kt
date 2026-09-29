@@ -82,4 +82,16 @@ object Prefs {
 
     fun setCfgVersion(ctx: Context, v: Long) =
         sp(ctx).edit().putLong("cfg_version", v).apply()
+
+    // v2.4.5 防冻僵: 主循环每轮刷新时间戳, 看门狗据此识别"线程活着但冻住"(CPU休眠冻结Thread.sleep)
+    fun lastLoopAt(ctx: Context): Long = sp(ctx).getLong("last_loop_at", 0L)
+
+    fun setLastLoopAt(ctx: Context, v: Long) =
+        sp(ctx).edit().putLong("last_loop_at", v).apply()
+
+    // v2.4.5 探活节流: 看门狗/探活闹钟双通道可能先后到点, 3分钟内只 poll 一次防重复耗配额
+    fun lastProbeAt(ctx: Context): Long = sp(ctx).getLong("last_probe_at", 0L)
+
+    fun setLastProbeAt(ctx: Context, v: Long) =
+        sp(ctx).edit().putLong("last_probe_at", v).apply()
 }

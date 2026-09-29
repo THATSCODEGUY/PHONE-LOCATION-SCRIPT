@@ -22,6 +22,7 @@ import org.json.JSONObject
 import java.net.URLEncoder
 import java.time.Instant
 import java.time.LocalDateTime
+import java.util.Calendar
 import kotlin.concurrent.thread
 
 class TrackerService : Service() {
@@ -83,6 +84,78 @@ class TrackerService : Service() {
             )
             am.cancel(pi)
         }
+
+        // v2.4.5: 工作日判断, 支持 "1-5" / "1,3,5" / "1-3,5,7" (1=周一 ... 7=周日) — 上移伴生对象供闹钟排程复用
+        private fun dayInSet(dow: Int, spec: String): Boolean {
+            for (part in spec.split(',')) {
+                val p = part.trim()
+                if (p.isEmpty()) continue
+                if (p.contains('-')) {
+                    val a = p.substringBefore('-').toIntOrNull() ?: continue
+                    val b = p.substringAfter('-').toIntOrNull() ?: continue
+                    if (dow in a..b) return true
+                } else {
+                    if (p.toIntOrNull() == dow) return true
+                }
+            }
+            return false
+        }
+
+        // v2.4.5 睡眠期探活闹钟 (requestCode 1002): 取代 Thread.sleep(10分钟)——
+        // 闹钟由内核触发, 灭屏深度休眠也能准时唤醒; 线程睡眠计时在 CPU 休眠下会冻结, 曾致探活停摆数小时
+        private fun sleepProbePi(ctx: Context): PendingIntent =
+            PendingIntent.getBroadcast(
+                ctx, 1002,
+                Intent(ctx, AlarmReceiver::class.java).putExtra("probe", true),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+        fun scheduleSleepProbe(ctx: Context) {
+            val am = ctx.getSystemService(AlarmManager::class.java) ?: return
+            val at = nextWakeAtMs(ctx)
+            try {
+                if (Build.VERSION.SDK_INT >= 31 && am.canScheduleExactAlarms()) {
+                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, sleepProbePi(ctx))
+                } else {
+                    am.setAlarmClock(AlarmManager.AlarmClockInfo(at, null), sleepProbePi(ctx))
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        fun cancelSleepProbe(ctx: Context) {
+            val am = ctx.getSystemService(AlarmManager::class.java) ?: return
+            am.cancel(sleepProbePi(ctx))
+        }
+
+        // v2.4.5: 下一唤醒时刻 = min(10分钟探活, 下个运行日窗口开始整点) — 窗口开始准点恢复轮询, 不再最多迟10分钟
+        private fun nextWakeAtMs(ctx: Context): Long {
+            val now = System.currentTimeMillis()
+            val base = now + SLEEP_CHUNK_MS
+            if (!Prefs.cfgEnabled(ctx)) return base
+            val startMin = Prefs.cfgWorkStart(ctx)
+            val cal = Calendar.getInstance()
+            for (d in 0..7) {
+                val c = cal.clone() as Calendar
+                c.add(Calendar.DAY_OF_YEAR, d)
+                c.set(Calendar.HOUR_OF_DAY, startMin / 60)
+                c.set(Calendar.MINUTE, startMin % 60)
+                c.set(Calendar.SECOND, 0)
+                c.set(Calendar.MILLISECOND, 0)
+                if (c.timeInMillis <= now) continue
+                val dow = when (c.get(Calendar.DAY_OF_WEEK)) {
+                    Calendar.TUESDAY -> 2
+                    Calendar.WEDNESDAY -> 3
+                    Calendar.THURSDAY -> 4
+                    Calendar.FRIDAY -> 5
+                    Calendar.SATURDAY -> 6
+                    Calendar.SUNDAY -> 7
+                    else -> 1
+                }
+                if (dayInSet(dow, Prefs.cfgWorkDays(ctx))) return minOf(base, c.timeInMillis)
+            }
+            return base
+        }
     }
 
     @Volatile
@@ -115,6 +188,7 @@ class TrackerService : Service() {
         when {
             intent?.getBooleanExtra("stop_now", false) == true -> {
                 cancelWatchdog(this)
+                cancelSleepProbe(this)
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -123,7 +197,8 @@ class TrackerService : Service() {
             }
         }
         scheduleWatchdog(this)
-        if (loopThread?.isAlive != true) startLoop()
+        reviveFrozenLoopIfNeeded()
+        dispatchLoop()
         return START_STICKY
     }
 
@@ -142,25 +217,55 @@ class TrackerService : Service() {
         loopThread = thread(name = "tracker-loop") { loop() }
     }
 
-    /* ---------------- 主循环: 配置判定 → 补传 → 被动到点上报 → 短轮询挂线 ---------------- */
-
-    // v2.4.2: 工作日判断, 支持 "1-5" / "1,3,5" / "1-3,5,7" (1=周一 ... 7=周日)
-    private fun dayInSet(dow: Int, spec: String): Boolean {
-        for (part in spec.split(',')) {
-            val p = part.trim()
-            if (p.isEmpty()) continue
-            if (p.contains('-')) {
-                val a = p.substringBefore('-').toIntOrNull() ?: continue
-                val b = p.substringAfter('-').toIntOrNull() ?: continue
-                if (dow in a..b) return true
+    // v2.4.5 循环调度: 窗口内跑轮询线程; 窗口外不驻线程, 只靠精确闹钟探活+看门狗兜底
+    // (所有入口统一走这里: 开机/看门狗/探活闹钟/打开App)
+    private fun dispatchLoop() {
+        if (loopThread?.isAlive == true) return
+        if (inWorkWindow()) {
+            startLoop()
+            return
+        }
+        updateNotif(offWindowText())
+        thread(name = "probe") {
+            probePollThrottled()
+            // poll 应答可能携带新配置改变了窗口判定, 故 poll 后再定夺
+            if (inWorkWindow() && loopThread?.isAlive != true) {
+                startLoop()
             } else {
-                if (p.toIntOrNull() == dow) return true
+                scheduleSleepProbe(this@TrackerService)
             }
         }
-        return false
     }
 
+    // v2.4.5: 看门狗(15min)与探活闹钟(10min)可能先后到点, 3分钟节流防重复 poll 耗配额
+    private fun probePollThrottled() {
+        val now = System.currentTimeMillis()
+        if (now - Prefs.lastProbeAt(this) >= 3 * 60_000L) {
+            Prefs.setLastProbeAt(this, now)
+            pollOnce(0)
+        }
+    }
+
+    // v2.4.5: 看门狗补盲区 — 线程"活着但冻住"(CPU休眠冻结Thread.sleep, isAlive仍为true)时强制换血。
+    // 阈值8分钟: 大于窗口内一轮最长耗时(定位~25s+轮询~20s+补传若干), 小于看门狗15分钟
+    private fun reviveFrozenLoopIfNeeded() {
+        val t = loopThread ?: return
+        if (!t.isAlive) return
+        val last = Prefs.lastLoopAt(this)
+        if (last > 0L && System.currentTimeMillis() - last > 8 * 60_000L) {
+            Prefs.setLastResult(this, "看门狗: 循环疑似冻结, 已强制重启 ${java.time.LocalTime.now().withNano(0)}")
+            try {
+                t.interrupt()
+            } catch (_: Exception) {
+            }
+            startLoop()
+        }
+    }
+
+    /* ---------------- 主循环: 配置判定 → 补传 → 被动到点上报 → 短轮询挂线 ---------------- */
+
     // v2.4.2: 窗口判定读远程配置 (总开关 + 星期 + 起止), 地图端改完全局生效
+    // (dayInSet 已上移伴生对象 v2.4.5)
     private fun inWorkWindow(): Boolean {
         if (!Prefs.cfgEnabled(this)) return false
         val now = LocalDateTime.now()
@@ -224,14 +329,19 @@ class TrackerService : Service() {
     }
 
     private fun loop() {
-        while (running && Prefs.configured(this)) {
+        // v2.4.5: 每轮刷新 lastLoopAt 供看门狗识别冻僵; 只认自己是当前循环线程, 被换血后旧线程自动退出
+        while (running && Prefs.configured(this) && Thread.currentThread() === loopThread) {
+            Prefs.setLastLoopAt(this, System.currentTimeMillis())
             try {
-                // v2.4.2: 窗口外/停用 → 休眠, 但每 10 分钟探活一次 (收新配置 + 紧急定位命令)
+                // v2.4.5: 窗口外/停用 → 探活一次后交给精确闹钟接管, 线程干净退出(服务保留前台通知)。
+                // 旧写法 Thread.sleep(10分钟) 在灭屏休眠下计时冻结, 探活停摆数小时, 看门狗见线程"活着"也不救——本次根治
                 if (!inWorkWindow()) {
                     updateNotif(offWindowText())
                     pollOnce(0)
-                    Thread.sleep(SLEEP_CHUNK_MS)
-                    continue
+                    Prefs.setLastProbeAt(this, System.currentTimeMillis())
+                    scheduleWatchdog(this)
+                    scheduleSleepProbe(this)
+                    break
                 }
 
                 val remaining = Outbox.flush(this, Prefs.apiBase(this), Prefs.deviceKey(this))
