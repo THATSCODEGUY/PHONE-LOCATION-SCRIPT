@@ -280,7 +280,8 @@ class MainActivity : Activity() {
             append("轮询次数: ").append(Prefs.pollCount(this@MainActivity)).append('\n')
             append("待补传: ").append(Outbox.size(this@MainActivity)).append(" 条\n")
             append("设备所有者: ").append(if (isDeviceOwner()) "已启用(系统级保护)" else "未启用").append('\n')
-            append("网络守卫: ").append(dataGuardText())
+            append("网络守卫: ").append(dataGuardText()).append('\n')
+            append("提示: 升级App/系统后请复查 省电策略=无限制(系统会静默重置)")
         }
     }
 

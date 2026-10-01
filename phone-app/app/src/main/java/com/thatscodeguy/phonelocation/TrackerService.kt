@@ -72,13 +72,19 @@ class TrackerService : Service() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
             val at = System.currentTimeMillis() + WATCHDOG_MIN * 60_000L
+            // v2.5.2: 看门狗禁止使用 setAlarmClock——每 App 仅一个系统闹钟槽位, 该槽位专属探活闹钟
+            // (闹钟通道是 HyperOS 夜间省电层唯一不敢冻结的通道, 不能被看门狗挤掉)
             try {
-                if (Build.VERSION.SDK_INT >= 31 && am.canScheduleExactAlarms()) {
+                if (Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms()) {
                     am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
                 } else {
-                    am.setAlarmClock(AlarmManager.AlarmClockInfo(at, null), pi)
+                    am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
                 }
             } catch (_: Exception) {
+                try {
+                    am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+                } catch (_: Exception) {
+                }
             }
         }
 
@@ -120,13 +126,16 @@ class TrackerService : Service() {
         fun scheduleSleepProbe(ctx: Context) {
             val am = ctx.getSystemService(AlarmManager::class.java) ?: return
             val at = nextWakeAtMs(ctx)
+            // v2.5.2: setAlarmClock 为主通道——走系统闹钟通道, HyperOS 夜间省电层不敢冻结
+            // (实测: 省电策略被系统重置为"限制后台"后, setExactAndAllowWhileIdle 整夜被冻结,
+            //  探活停摆/服务被杀; 系统闹钟通道是唯一必达路径)。代价: 状态栏常驻小闹钟图标
             try {
-                if (Build.VERSION.SDK_INT >= 31 && am.canScheduleExactAlarms()) {
-                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, sleepProbePi(ctx))
-                } else {
-                    am.setAlarmClock(AlarmManager.AlarmClockInfo(at, null), sleepProbePi(ctx))
-                }
+                am.setAlarmClock(AlarmManager.AlarmClockInfo(at, null), sleepProbePi(ctx))
             } catch (_: Exception) {
+                try {
+                    am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, sleepProbePi(ctx))
+                } catch (_: Exception) {
+                }
             }
         }
 
@@ -294,12 +303,20 @@ class TrackerService : Service() {
             val want = Prefs.cfgEnabled(this)
             val has = dpm.getUserRestrictions(admin)
                 .getBoolean(UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS)
-            if (want && !has) {
+            // v2.5.2 保险丝: 持续断网超30分钟自动解除限制——该限制拦"关数据"也可能拦机主"开数据",
+            // 断网状态下远程指令又送不进来, 必须给机主留手动开数据自救的口子
+            val off = Prefs.offlineSince(this)
+            val fuse = off != 0L && System.currentTimeMillis() - off > 30 * 60_000L
+            if (want && !has && !fuse) {
                 dpm.addUserRestriction(admin, UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS)
                 Prefs.setLastResult(this, "网络守卫: 已限制改动移动网络设置 ${java.time.LocalTime.now().withNano(0)}")
-            } else if (!want && has) {
+            } else if ((!want || fuse) && has) {
                 dpm.clearUserRestriction(admin, UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS)
-                Prefs.setLastResult(this, "网络守卫: 已恢复移动网络自由(定位停用) ${java.time.LocalTime.now().withNano(0)}")
+                Prefs.setLastResult(
+                    this,
+                    if (!want) "网络守卫: 已恢复移动网络自由(定位停用) ${java.time.LocalTime.now().withNano(0)}"
+                    else "网络守卫: 断网超30分钟, 已自动解除限制(可手动开数据) ${java.time.LocalTime.now().withNano(0)}",
+                )
             }
         } catch (_: Exception) {
         }
@@ -307,20 +324,26 @@ class TrackerService : Service() {
 
     // 网络状态巡检: 断网期间留痕可见(数据被关/无信号), 恢复瞬间由 onAvailable 立即探活秒级回绿
     private fun networkGuardTick() {
-        syncNetworkRestriction()
-        try {
-            val cm = getSystemService(ConnectivityManager::class.java) ?: return
-            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
-            val online = caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            if (!online) {
-                val now = System.currentTimeMillis()
-                if (now - lastGuardTraceAt > 10 * 60_000L) {
-                    lastGuardTraceAt = now
-                    Prefs.setLastResult(this, "网络守卫: 当前断网(数据被关/无信号), 恢复后秒级上线 ${java.time.LocalTime.now().withNano(0)}")
-                }
+        val online = isOnline()
+        if (online) {
+            if (Prefs.offlineSince(this) != 0L) Prefs.setOfflineSince(this, 0L)
+        } else {
+            if (Prefs.offlineSince(this) == 0L) Prefs.setOfflineSince(this, System.currentTimeMillis())
+            val now = System.currentTimeMillis()
+            if (now - lastGuardTraceAt > 10 * 60_000L) {
+                lastGuardTraceAt = now
+                Prefs.setLastResult(this, "网络守卫: 当前断网(数据被关/无信号), 恢复后秒级上线 ${java.time.LocalTime.now().withNano(0)}")
             }
-        } catch (_: Exception) {
         }
+        syncNetworkRestriction()
+    }
+
+    private fun isOnline(): Boolean = try {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return false
+        val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+        caps != null && caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    } catch (_: Exception) {
+        false
     }
 
     // v2.5.1 网络监听: 网络恢复→立即探活刷新心跳(秒级回绿, 不等下个闹钟/轮询)

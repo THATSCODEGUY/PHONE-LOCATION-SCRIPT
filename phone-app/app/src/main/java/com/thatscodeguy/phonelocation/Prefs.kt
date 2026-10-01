@@ -94,4 +94,10 @@ object Prefs {
 
     fun setLastProbeAt(ctx: Context, v: Long) =
         sp(ctx).edit().putLong("last_probe_at", v).apply()
+
+    // v2.5.2 网络守卫保险丝: 断网起点(0=在线); 持续断网超30分钟自动解除"限制改网", 保证机主随时能手动开数据自救
+    fun offlineSince(ctx: Context): Long = sp(ctx).getLong("offline_since", 0L)
+
+    fun setOfflineSince(ctx: Context, v: Long) =
+        sp(ctx).edit().putLong("offline_since", v).apply()
 }
